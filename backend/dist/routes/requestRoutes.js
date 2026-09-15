@@ -1,0 +1,17 @@
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+const express_1 = require("express");
+const requestController_1 = require("../controllers/requestController");
+const authMiddleware_1 = require("../middleware/authMiddleware");
+const router = (0, express_1.Router)();
+router.use(authMiddleware_1.authenticateJWT);
+router.get('/', requestController_1.getAllRequests);
+router.get('/:id', requestController_1.getRequestById);
+router.post('/', requestController_1.createRequest);
+router.post('/:id/approve', requestController_1.approveRequest);
+router.post('/:id/reject', requestController_1.rejectRequest);
+router.post('/:id/query', requestController_1.raiseQuery);
+router.post('/:id/respond', requestController_1.respondToQuery);
+router.post('/:id/escalate', requestController_1.escalateRequest);
+router.post('/:id/reassign', requestController_1.reassignRequest);
+exports.default = router;

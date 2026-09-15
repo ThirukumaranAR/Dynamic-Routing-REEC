@@ -1,0 +1,1643 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Northstar Workflow - Company Approval Engine</title>
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- React & ReactDOM CDN -->
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+  <!-- Babel Standalone for in-browser JSX compilation -->
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <!-- Google Font -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <style>
+    body, html, #root { height: 100%; margin: 0; padding: 0; font-family: 'Inter', sans-serif; }
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 9999px; }
+    ::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+  </style>
+</head>
+<body class="h-full bg-slate-50 text-slate-800 antialiased">
+  <div id="root" class="h-full"></div>
+
+  <script type="text/babel">
+    const { useState, useEffect } = React;
+
+    // --- 8 Enterprise Users ---
+    const initialUsers = [
+      { email: 'requester@gmail.com', password: 'pass123', name: 'Arun', role: 'REQUESTER', dept: 'Computer Science and Engineering', campus: 'EEC' },
+      { email: 'manager@gmail.com', password: 'pass123', name: 'Rajan Mehta', role: 'MANAGER', dept: 'Operations & Line Management', campus: 'Main' },
+      { email: 'hr@gmail.com', password: 'pass123', name: 'Sarah Jenkins', role: 'HR', dept: 'Human Resources Directorate', campus: 'Main' },
+      { email: 'it@gmail.com', password: 'pass123', name: 'Vikram Seth', role: 'IT', dept: 'IT Infrastructure', campus: 'Main' },
+      { email: 'finance@gmail.com', password: 'pass123', name: 'Amitabh Verma', role: 'FINANCE', dept: 'Finance Directorate', campus: 'Main' },
+      { email: 'accountant@gmail.com', password: 'pass123', name: 'Pooja Sharma', role: 'ACCOUNTANT', dept: 'Finance & Accounts', campus: 'Main' },
+      { email: 'gm@gmail.com', password: 'pass123', name: 'Kavitha Reddy', role: 'GENERAL_MANAGER', dept: 'Executive Office', campus: 'Main' },
+      { email: 'ceo@gmail.com', password: 'pass123', name: 'Dr. Suresh Kumar', role: 'CEO', dept: 'Chief Executive Office', campus: 'Main' }
+    ];
+
+    const initialRequests = [
+      {
+        id: 'REQ-001',
+        title: 'Industrial Visit to TCS Chennai',
+        department: 'Computer Science and Engineering',
+        amount: 100000,
+        date: '27/08/2026',
+        status: 'APPROVED',
+        category: 'Academic',
+        requester: 'Arun',
+        description: 'Industrial visit to Tata Consultancy Services, Siruseri, Chennai for 3rd year CSE students.',
+        currentStage: 'COMPLETED',
+        businessHoursIdle: 0,
+        attachments: [
+          { name: 'TCS_Company_Confirmation_Letter.pdf', size: '1.2 MB', type: 'PDF' },
+          { name: 'CSE_Students_List_and_Bus_Quote.pdf', size: '850 KB', type: 'PDF' }
+        ],
+        auditTrail: [
+          { ts: '27/08/2026 09:30', actor: 'Arun (Requester)', action: 'Request submitted to Manager in Approval Queue' },
+          { ts: '27/08/2026 11:00', actor: 'Rajan Mehta (Manager)', action: 'Manager verified and routed to IT Department' },
+          { ts: '27/08/2026 13:00', actor: 'Vikram Seth (IT)', action: 'IT Head approved and forwarded to General Manager' },
+          { ts: '27/08/2026 14:15', actor: 'Kavitha Reddy (General Manager)', action: 'Approved and forwarded to CEO' },
+          { ts: '27/08/2026 16:30', actor: 'Dr. Suresh Kumar (CEO)', action: 'Final approval granted' }
+        ]
+      },
+      {
+        id: 'REQ-002',
+        title: 'Lab Workstation Equipment Purchase',
+        department: 'Computer Science and Engineering',
+        amount: 250000,
+        date: '28/08/2026',
+        status: 'PENDING',
+        category: 'Procurement',
+        requester: 'Arun',
+        description: 'Purchase of 10 high-performance GPU workstations for the AI/ML laboratory.',
+        currentStage: 'MANAGER',
+        businessHoursIdle: 3.5,
+        attachments: [
+          { name: 'Workstation_Vendor_Quotation_Dell.pdf', size: '2.4 MB', type: 'PDF' },
+          { name: 'Lab_Specification_Sheet.pdf', size: '1.1 MB', type: 'PDF' }
+        ],
+        auditTrail: [
+          { ts: '28/08/2026 09:15', actor: 'Arun (Requester)', action: 'Request submitted to Approval Queue' },
+          { ts: '28/08/2026 09:20', actor: 'System', action: 'Assigned to Manager for verification and department branch selection' }
+        ]
+      },
+      {
+        id: 'REQ-003',
+        title: 'Faculty Recruitment & Onboarding Packages',
+        department: 'Human Resources',
+        amount: 180000,
+        date: '29/08/2026',
+        status: 'PENDING',
+        category: 'HR',
+        requester: 'Priya Nair',
+        description: 'Relocation reimbursement and appointment clearances for 3 newly recruited Assistant Professors.',
+        currentStage: 'HR',
+        businessHoursIdle: 2.5,
+        attachments: [
+          { name: 'Faculty_Selection_Committee_Report.pdf', size: '1.5 MB', type: 'PDF' }
+        ],
+        auditTrail: [
+          { ts: '29/08/2026 09:00', actor: 'Priya Nair (Requester)', action: 'Submitted request to Manager' },
+          { ts: '29/08/2026 10:15', actor: 'Rajan Mehta (Manager)', action: 'Manager selected HR branch & routed to HR Head' }
+        ]
+      },
+      {
+        id: 'REQ-004',
+        title: 'Campus Fiber Network Switch Replacement',
+        department: 'IT Department',
+        amount: 140000,
+        date: '29/08/2026',
+        status: 'ESCALATED',
+        category: 'Training',
+        requester: 'Daniel Osei',
+        description: 'Core 10Gbps managed switch replacement for academic block connectivity.',
+        currentStage: 'CEO',
+        businessHoursIdle: 6.5,
+        attachments: [
+          { name: 'Cisco_Switch_Quote_Invoice.pdf', size: '1.8 MB', type: 'PDF' }
+        ],
+        auditTrail: [
+          { ts: '28/08/2026 09:00', actor: 'Daniel Osei (Requester)', action: 'Request submitted to Approval Queue' },
+          { ts: '29/08/2026 16:00', actor: 'System (Business SLA Engine)', action: '⚠️ Business SLA Breached (>6 business hours idle between 9AM-5PM Mon-Fri) — Auto-Escalated to CEO' }
+        ]
+      },
+      {
+        id: 'REQ-005',
+        title: 'Conference Registration & Travel Grant',
+        department: 'IT Department',
+        amount: 35000,
+        date: '30/08/2026',
+        status: 'QUERIED',
+        category: 'Finance',
+        requester: 'Arun',
+        description: 'Registration fee and airfare for IEEE International AI Conference.',
+        currentStage: 'FINANCE',
+        businessHoursIdle: 1.5,
+        query: 'Please attach the official IEEE acceptance notification and revised travel breakdown.',
+        attachments: [
+          { name: 'Conference_Brochure.pdf', size: '640 KB', type: 'PDF' }
+        ],
+        auditTrail: [
+          { ts: '30/08/2026 09:30', actor: 'Arun (Requester)', action: 'Request submitted to Approval Queue' },
+          { ts: '30/08/2026 10:00', actor: 'Rajan Mehta (Manager)', action: 'Manager routed to Finance Head' },
+          { ts: '30/08/2026 11:00', actor: 'Amitabh Verma (Finance)', action: 'Query raised: Requested acceptance letter' }
+        ]
+      }
+    ];
+
+    function formatINR(amt) {
+      return new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 }).format(amt);
+    }
+
+    // Progression: Manager -> Finance Head -> Accountant -> GM -> CEO
+    function getNextStage(category, currentStage) {
+      switch (currentStage) {
+        case 'MANAGER':
+          if (category === 'HR') return 'HR';
+          if (category === 'IT' || category === 'Academic' || category === 'Training') return 'IT';
+          if (category === 'Finance' || category === 'Procurement') return 'FINANCE';
+          return 'FINANCE';
+        case 'FINANCE':
+          return 'ACCOUNTANT';
+        case 'ACCOUNTANT':
+        case 'HR':
+        case 'IT':
+          return 'GENERAL_MANAGER';
+        case 'GENERAL_MANAGER':
+          return 'CEO';
+        case 'CEO':
+          return 'COMPLETED';
+        default:
+          return 'COMPLETED';
+      }
+    }
+
+    function isCurrentlyBusinessHours() {
+      const now = new Date();
+      const day = now.getDay();
+      const isWeekday = day >= 1 && day <= 5;
+      const hours = now.getHours() + now.getMinutes() / 60;
+      return isWeekday && hours >= 9 && hours < 17;
+    }
+
+    function getRoleDisplayName(role) {
+      switch (role) {
+        case 'REQUESTER': return 'Requester (HoD / Employee)';
+        case 'MANAGER': return 'Institution Manager';
+        case 'HR': return 'HR Head';
+        case 'IT': return 'IT Head';
+        case 'FINANCE': return 'Finance Head';
+        case 'ACCOUNTANT': return 'Accountant';
+        case 'GENERAL_MANAGER': return 'Head of Institution / GM';
+        case 'CEO': return 'Chairman / CEO';
+        case 'COMPLETED': return 'Completed & Approved';
+        default: return role;
+      }
+    }
+
+    function getStageActorName(stage) {
+      switch (stage) {
+        case 'MANAGER': return 'Rajan Mehta (Institution Manager)';
+        case 'HR': return 'Sarah Jenkins (HR Head)';
+        case 'IT': return 'Vikram Seth (IT Head)';
+        case 'FINANCE': return 'Amitabh Verma (Finance Head)';
+        case 'ACCOUNTANT': return 'Pooja Sharma (Accountant)';
+        case 'GENERAL_MANAGER': return 'Kavitha Reddy (Head of Institution / GM)';
+        case 'CEO': return 'Dr. Suresh Kumar (Chairman / CEO)';
+        case 'COMPLETED': return 'Approved & Finalized';
+        default: return stage;
+      }
+    }
+
+    function SrmLogo({ size = 32 }) {
+      return (
+        <svg width={size} height={size} viewBox="0 0 36 36" fill="none">
+          <rect width="36" height="36" rx="8" fill="#2563eb" />
+          <path d="M18 6L9 10.5V17.5C9 23.5 12.8 28.9 18 30.5C23.2 28.9 27 23.5 27 17.5V10.5L18 6Z" fill="white" fillOpacity="0.2" stroke="white" strokeWidth="1.8" strokeLinejoin="round" />
+          <path d="M14 18.5L16.8 21.3L22.5 15.5" stroke="white" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      );
+    }
+
+    function Icon({ name, className = 'w-5 h-5' }) {
+      switch(name) {
+        case 'dashboard': return <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>;
+        case 'requests': return <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>;
+        case 'create': return <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4"/></svg>;
+        case 'categories': return <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zm10 0a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zm10 0a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z"/></svg>;
+        case 'queries': return <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"/></svg>;
+        case 'completion': return <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg>;
+        case 'profile': return <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"/></svg>;
+        case 'logout': return <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"/></svg>;
+        case 'chevron': return <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7"/></svg>;
+        case 'eye': return <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path strokeLinecap="round" strokeLinejoin="round" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></svg>;
+        case 'eyeoff': return <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l3.59 3.59m0 0A9.953 9.953 0 0112 5c4.478 0 8.268 2.943 9.543 7a10.025 10.025 0 01-4.132 5.411m0 0L21 21"/></svg>;
+        case 'check': return <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7"/></svg>;
+        case 'x': return <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>;
+        case 'warning': return <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>;
+        case 'chat': return <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z"/></svg>;
+        case 'total': return <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4"/></svg>;
+        case 'clock': return <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><circle cx="12" cy="12" r="9"/><path strokeLinecap="round" strokeLinejoin="round" d="M12 7v5l3 3"/></svg>;
+        default: return null;
+      }
+    }
+
+    const statusConfig = {
+      PENDING: { bg: 'bg-yellow-50', text: 'text-yellow-700', dot: 'bg-yellow-400' },
+      APPROVED: { bg: 'bg-green-50', text: 'text-green-700', dot: 'bg-green-500' },
+      REJECTED: { bg: 'bg-red-50', text: 'text-red-700', dot: 'bg-red-500' },
+      QUERIED: { bg: 'bg-orange-50', text: 'text-orange-700', dot: 'bg-orange-400' },
+      ESCALATED: { bg: 'bg-purple-50', text: 'text-purple-700', dot: 'bg-purple-500' }
+    };
+
+    function StatusBadge({ status }) {
+      const cfg = statusConfig[status] || statusConfig.PENDING;
+      return (
+        <span className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold ${cfg.bg} ${cfg.text}`}>
+          <span className={`w-1.5 h-1.5 rounded-full ${cfg.dot}`} />
+          {status}
+        </span>
+      );
+    }
+
+    function MetricCard({ icon, iconBg, iconColor, label, value, desc, onClick }) {
+      return (
+        <button onClick={onClick} className="bg-white rounded-xl border border-slate-100 shadow-sm p-4 text-left hover:shadow-md hover:border-slate-200 transition group w-full cursor-pointer">
+          <div className={`w-9 h-9 rounded-lg flex items-center justify-center mb-2.5 ${iconBg}`}>
+            <Icon name={icon} className={`w-4 h-4 ${iconColor}`} />
+          </div>
+          <p className="text-xs font-medium text-slate-500 mb-0.5">{label}</p>
+          <p className="text-2xl font-bold text-slate-900 mb-0.5">{value}</p>
+          <p className="text-[11px] text-slate-400 mb-2 leading-tight line-clamp-1">{desc}</p>
+          <span className="text-[11px] text-blue-600 font-medium group-hover:underline flex items-center gap-0.5">
+            View <Icon name="chevron" className="w-2.5 h-2.5" />
+          </span>
+        </button>
+      );
+    }
+
+    function App() {
+      const [currentUser, setCurrentUser] = useState(null);
+      const [isSignUp, setIsSignUp] = useState(false);
+
+      const [loginEmail, setLoginEmail] = useState('');
+      const [loginPassword, setLoginPassword] = useState('');
+      const [showPassword, setShowPassword] = useState(false);
+      const [authError, setAuthError] = useState('');
+
+      const [suName, setSuName] = useState('');
+      const [suEmail, setSuEmail] = useState('');
+      const [suPassword, setSuPassword] = useState('');
+      const [suRole, setSuRole] = useState('REQUESTER');
+      const [suDept, setSuDept] = useState('Computer Science and Engineering');
+      const [suCampus, setSuCampus] = useState('Main');
+
+      const [isEditingProfile, setIsEditingProfile] = useState(false);
+      const [pName, setPName] = useState('');
+      const [pDept, setPDept] = useState('');
+      const [pCampus, setPCampus] = useState('');
+      const [pRole, setPRole] = useState('REQUESTER');
+      const [pSuccessMsg, setPSuccessMsg] = useState('');
+
+      const [activeTab, setActiveTab] = useState('dashboard');
+      const [requests, setRequests] = useState(initialRequests);
+      const [selectedRequest, setSelectedRequest] = useState(null);
+      const [statusFilter, setStatusFilter] = useState('ALL');
+
+      const [viewingDocument, setViewingDocument] = useState(null);
+
+      // Manager's branch selection state: defaults to FINANCE
+      const [selectedBranch, setSelectedBranch] = useState('FINANCE');
+
+      // Success feedback state
+      const [actionSuccessMsg, setActionSuccessMsg] = useState('');
+
+      const [title, setTitle] = useState('');
+      const [category, setCategory] = useState('Academic');
+      const [amount, setAmount] = useState('');
+      const [description, setDescription] = useState('');
+      const [formAttachments, setFormAttachments] = useState([]);
+      const [isCreated, setIsCreated] = useState(false);
+
+      const [revisedTitle, setRevisedTitle] = useState('');
+      const [revisedAmount, setRevisedAmount] = useState('');
+      const [revisedDescription, setRevisedDescription] = useState('');
+      const [responseExplanation, setResponseExplanation] = useState('');
+
+      const [queryText, setQueryText] = useState('');
+
+      const isBusinessTime = isCurrentlyBusinessHours();
+
+      useEffect(() => {
+        if (selectedRequest) {
+          setRevisedTitle(selectedRequest.title);
+          setRevisedAmount(selectedRequest.amount.toString());
+          setRevisedDescription(selectedRequest.description);
+          setResponseExplanation('');
+          setActionSuccessMsg('');
+
+          if (selectedRequest.category === 'HR') setSelectedBranch('HR');
+          else if (selectedRequest.category === 'Finance' || selectedRequest.category === 'Procurement') setSelectedBranch('FINANCE');
+          else setSelectedBranch('IT');
+        }
+      }, [selectedRequest]);
+
+      const formatTimestamp = () => new Date().toLocaleString('en-IN', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+      const formatDate = () => new Date().toLocaleDateString('en-IN', { day: '2-digit', month: '2-digit', year: 'numeric' });
+
+      const handleLogin = (e) => {
+        e.preventDefault();
+        const found = initialUsers.find(u => u.email.toLowerCase() === loginEmail.trim().toLowerCase() && u.password === loginPassword);
+        if (found) {
+          setCurrentUser(found);
+          setPName(found.name);
+          setPDept(found.dept);
+          setPCampus(found.campus);
+          setPRole(found.role);
+          setActiveTab('dashboard');
+          setAuthError('');
+        } else {
+          setAuthError('Invalid credentials.');
+        }
+      };
+
+      const handleSignUp = (e) => {
+        e.preventDefault();
+        if (!suName.trim() || !suEmail.trim() || !suPassword.trim()) {
+          setAuthError('Please fill in all fields.');
+          return;
+        }
+
+        const newUser = {
+          name: suName.trim(),
+          email: suEmail.trim(),
+          password: suPassword,
+          role: suRole,
+          dept: suDept.trim() || 'General Department',
+          campus: suCampus.trim() || 'Main'
+        };
+
+        initialUsers.push(newUser);
+        setCurrentUser(newUser);
+        setPName(newUser.name);
+        setPDept(newUser.dept);
+        setPCampus(newUser.campus);
+        setPRole(newUser.role);
+        setActiveTab('dashboard');
+        setAuthError('');
+      };
+
+      const handleSaveProfile = (e) => {
+        e.preventDefault();
+        if (!pName.trim() || !pDept.trim()) return;
+
+        const updated = {
+          ...currentUser,
+          name: pName.trim(),
+          dept: pDept.trim(),
+          campus: pCampus.trim() || 'Main',
+          role: currentUser.role // Role is locked
+        };
+
+        const idx = initialUsers.findIndex(u => u.email.toLowerCase() === currentUser.email.toLowerCase());
+        if (idx !== -1) {
+          initialUsers[idx] = { ...initialUsers[idx], ...updated };
+        }
+
+        setCurrentUser(updated);
+        setIsEditingProfile(false);
+        setPSuccessMsg('Profile updated successfully!');
+        setTimeout(() => setPSuccessMsg(''), 3000);
+      };
+
+      const handleAdvanceStage = (id, nextStage, actionDesc) => {
+        const now = formatTimestamp();
+        setRequests(prev => prev.map(r => {
+          if (r.id === id) {
+            return {
+              ...r,
+              currentStage: nextStage,
+              status: 'PENDING',
+              businessHoursIdle: 0,
+              auditTrail: [...r.auditTrail, { ts: now, actor: `${currentUser.name} (${currentUser.role})`, action: actionDesc }]
+            };
+          }
+          return r;
+        }));
+
+        if (selectedRequest?.id === id) {
+          setSelectedRequest(prev => prev ? {
+            ...prev,
+            currentStage: nextStage,
+            status: 'PENDING',
+            businessHoursIdle: 0,
+            auditTrail: [...prev.auditTrail, { ts: now, actor: `${currentUser.name} (${currentUser.role})`, action: actionDesc }]
+          } : null);
+        }
+      };
+
+      const handleUpdateStatus = (id, newStatus, actionDesc, extra = {}) => {
+        const now = formatTimestamp();
+        setRequests(prev => prev.map(r => {
+          if (r.id === id) {
+            return {
+              ...r,
+              ...extra,
+              status: newStatus,
+              businessHoursIdle: 0,
+              auditTrail: [...r.auditTrail, { ts: now, actor: `${currentUser.name} (${currentUser.role})`, action: actionDesc }]
+            };
+          }
+          return r;
+        }));
+
+        if (selectedRequest?.id === id) {
+          setSelectedRequest(prev => prev ? {
+            ...prev,
+            ...extra,
+            status: newStatus,
+            businessHoursIdle: 0,
+            auditTrail: [...prev.auditTrail, { ts: now, actor: `${currentUser.name} (${currentUser.role})`, action: actionDesc }]
+          } : null);
+        }
+      };
+
+      const handleFileSelect = (e) => {
+        if (e.target.files && e.target.files.length > 0) {
+          const newFiles = Array.from(e.target.files).map(file => {
+            const sizeMb = (file.size / (1024 * 1024)).toFixed(1);
+            const sizeKb = (file.size / 1024).toFixed(0);
+            const displaySize = file.size >= 1024 * 1024 ? `${sizeMb} MB` : `${sizeKb} KB`;
+            const ext = file.name.split('.').pop()?.toUpperCase() || 'FILE';
+            return { name: file.name, size: displaySize, type: ext };
+          });
+          setFormAttachments(prev => [...prev, ...newFiles]);
+          e.target.value = '';
+        }
+      };
+
+      const handleCreateRequest = (e) => {
+        e.preventDefault();
+        if (!title.trim() || !amount) return;
+
+        const newId = `REQ-00${requests.length + 1}`;
+        const now = formatTimestamp();
+        const attachedDocs = formAttachments.length > 0 ? formAttachments : [
+          { name: `${title.trim().replace(/\s+/g, '_')}_Document.pdf`, size: '1.2 MB', type: 'PDF' }
+        ];
+
+        const newReq = {
+          id: newId,
+          title: title.trim(),
+          department: currentUser.dept,
+          amount: parseInt(amount, 10),
+          date: formatDate(),
+          status: 'PENDING',
+          category,
+          requester: currentUser.name,
+          description: description.trim(),
+          currentStage: 'MANAGER',
+          businessHoursIdle: 0,
+          campus: currentUser.campus,
+          attachments: attachedDocs,
+          auditTrail: [
+            { ts: now, actor: currentUser.name, action: `Request submitted to Approval Queue with ${attachedDocs.length} attachment(s)` },
+            { ts: now, actor: 'System', action: 'Assigned to Manager for verification & branch selection' }
+          ]
+        };
+
+        setRequests([newReq, ...requests]);
+        setTitle('');
+        setCategory('Academic');
+        setAmount('');
+        setDescription('');
+        setFormAttachments([]);
+        setIsCreated(true);
+
+        setTimeout(() => {
+          setIsCreated(false);
+          setActiveTab('all-requests');
+          setSelectedRequest(newReq);
+        }, 1500);
+      };
+
+      if (!currentUser) {
+        return (
+          <div className="min-h-full flex flex-col items-center justify-center bg-[#dde8f8] px-4 py-8">
+            <div className="mb-5 flex flex-col items-center gap-2">
+              <SrmLogo size={46} />
+              <div className="text-center">
+                <p className="text-slate-900 text-xl font-bold tracking-tight">Northstar Workflow</p>
+                <p className="text-xs text-blue-600 font-semibold mt-0.5">Multi-Tier Approval & Business SLA Engine</p>
+              </div>
+            </div>
+            <div className="w-full max-w-md bg-white rounded-2xl shadow-xl p-7 border border-slate-100">
+              <p className="text-center text-slate-600 text-sm mb-5 font-semibold">
+                {isSignUp ? 'Create a New User Account' : 'Sign In to Your Dashboard'}
+              </p>
+
+              {!isSignUp ? (
+                <form onSubmit={handleLogin} className="space-y-3.5">
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wide mb-1">Email Address</label>
+                    <input type="email" value={loginEmail} onChange={e => { setLoginEmail(e.target.value); setAuthError(''); }} required className="w-full border border-slate-200 bg-slate-50 rounded-lg px-3.5 py-2.5 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="requester@gmail.com" />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wide mb-1">Password</label>
+                    <div className="relative">
+                      <input type={showPassword ? 'text' : 'password'} value={loginPassword} onChange={e => { setLoginPassword(e.target.value); setAuthError(''); }} required className="w-full border border-slate-200 bg-slate-50 rounded-lg px-3.5 py-2.5 pr-10 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="pass123" />
+                      <button type="button" onClick={() => setShowPassword(!showPassword)} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600">
+                        <Icon name={showPassword ? 'eyeoff' : 'eye'} className="w-4 h-4" />
+                      </button>
+                    </div>
+                  </div>
+                  {authError && <p className="text-red-500 text-xs font-medium">{authError}</p>}
+                  <button type="submit" className="w-full bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white font-semibold py-2.5 rounded-lg transition text-sm shadow-sm cursor-pointer">Sign In</button>
+
+
+                </form>
+              ) : (
+                <form onSubmit={handleSignUp} className="space-y-4">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">Full Name *</label>
+                      <input type="text" value={suName} onChange={e => setSuName(e.target.value)} required className="w-full border border-slate-200 bg-slate-50 rounded-lg px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="e.g. John Doe" />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">Email *</label>
+                      <input type="email" value={suEmail} onChange={e => setSuEmail(e.target.value)} required className="w-full border border-slate-200 bg-slate-50 rounded-lg px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="name@organization.com" />
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">Password *</label>
+                      <input type="password" value={suPassword} onChange={e => setSuPassword(e.target.value)} required className="w-full border border-slate-200 bg-slate-50 rounded-lg px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="Create password" />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">Department</label>
+                      <input type="text" value={suDept} onChange={e => setSuDept(e.target.value)} className="w-full border border-slate-200 bg-slate-50 rounded-lg px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="e.g. Computer Science" />
+                    </div>
+                  </div>
+
+                  {/* 8-ROLE SELECTION TABS */}
+                  <div>
+                    <label className="block text-xs font-bold text-slate-800 uppercase tracking-wider mb-2">Select Your Enterprise System Role *</label>
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                      {[
+                        { role: 'REQUESTER', title: 'Requester', icon: '📝' },
+                        { role: 'MANAGER', title: 'Line Manager', icon: '👔' },
+                        { role: 'HR', title: 'HR Head', icon: '🏢' },
+                        { role: 'IT', title: 'IT Head', icon: '💻' },
+                        { role: 'FINANCE', title: 'Finance Head', icon: '💰' },
+                        { role: 'ACCOUNTANT', title: 'Accountant', icon: '📊' },
+                        { role: 'GENERAL_MANAGER', title: 'General Manager', icon: '🏛️' },
+                        { role: 'CEO', title: 'CEO / Chairman', icon: '👑' }
+                      ].map(item => (
+                        <button
+                          key={item.role}
+                          type="button"
+                          onClick={() => setSuRole(item.role)}
+                          className={`p-2.5 rounded-xl border text-left transition flex flex-col justify-between cursor-pointer ${
+                            suRole === item.role
+                              ? 'bg-blue-50 border-blue-600 text-blue-900 ring-2 ring-blue-400/40 font-semibold'
+                              : 'bg-slate-50 border-slate-200 hover:bg-slate-100 text-slate-700'
+                          }`}
+                        >
+                          <div className="flex items-center justify-between w-full mb-1">
+                            <span className="text-base">{item.icon}</span>
+                            {suRole === item.role && <span className="w-2 h-2 rounded-full bg-blue-600" />}
+                          </div>
+                          <p className="text-xs font-bold leading-tight">{item.title}</p>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <button type="submit" className="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2.5 rounded-lg transition text-sm shadow-sm cursor-pointer mt-1">
+                    Create Account as {getRoleDisplayName(suRole)}
+                  </button>
+                </form>
+              )}
+
+              <p className="text-center text-xs text-slate-500 mt-4">
+                {!isSignUp ? (
+                  <>Need an account? <button type="button" onClick={() => setIsSignUp(true)} className="text-blue-600 hover:text-blue-700 font-semibold cursor-pointer">Sign up</button></>
+                ) : (
+                  <>Already registered? <button type="button" onClick={() => setIsSignUp(false)} className="text-blue-600 hover:text-blue-700 font-semibold cursor-pointer">Sign in</button></>
+                )}
+              </p>
+            </div>
+          </div>
+        );
+      }
+
+      // All requests are visible so any role can track which stage each request is in!
+      const visibleRequests = requests;
+
+      const pendingAtMyStage = requests.filter(r => r.status === 'PENDING' && r.currentStage === currentUser.role).length;
+      const total = visibleRequests.length;
+      const approved = visibleRequests.filter(r => r.status === 'APPROVED').length;
+      const rejected = visibleRequests.filter(r => r.status === 'REJECTED').length;
+      const queries = visibleRequests.filter(r => r.status === 'QUERIED').length;
+      const escalated = visibleRequests.filter(r => r.status === 'ESCALATED' || r.businessHoursIdle >= 6).length;
+
+      const filteredRequests = statusFilter === 'ALL' ? visibleRequests : visibleRequests.filter(r => r.status === statusFilter);
+
+      const navTabs = [
+        { key: 'dashboard', icon: 'dashboard', label: 'Dashboard' },
+        { key: 'all-requests', icon: 'requests', label: 'All Requests' },
+        { key: 'create-request', icon: 'create', label: 'Create Requests', forRequesterOnly: true },
+        { key: 'flow-categories', icon: 'categories', label: 'Flow Categories' },
+        { key: 'queries', icon: 'queries', label: 'Queries' },
+        { key: 'completion-status', icon: 'completion', label: 'Completion Status' },
+        { key: 'my-profile', icon: 'profile', label: 'My Profile' }
+      ].filter(t => !t.forRequesterOnly || currentUser.role === 'REQUESTER');
+
+      const getStageList = (request) => {
+        if (request.currentStage === 'FINANCE' || request.currentStage === 'ACCOUNTANT' || request.category === 'Finance' || request.category === 'Procurement') {
+          return ['REQUESTER', 'MANAGER', 'FINANCE', 'ACCOUNTANT', 'GENERAL_MANAGER', 'CEO'];
+        }
+        if (request.currentStage === 'HR' || request.category === 'HR') {
+          return ['REQUESTER', 'MANAGER', 'HR', 'GENERAL_MANAGER', 'CEO'];
+        }
+        return ['REQUESTER', 'MANAGER', 'IT', 'GENERAL_MANAGER', 'CEO'];
+      };
+
+      const isMyTurnToApprove = selectedRequest && (
+        (currentUser.role === 'MANAGER' && selectedRequest.currentStage === 'MANAGER' && selectedRequest.status === 'PENDING') ||
+        (currentUser.role === 'FINANCE' && selectedRequest.currentStage === 'FINANCE' && selectedRequest.status === 'PENDING') ||
+        (currentUser.role === 'ACCOUNTANT' && selectedRequest.currentStage === 'ACCOUNTANT' && selectedRequest.status === 'PENDING') ||
+        (currentUser.role === 'HR' && selectedRequest.currentStage === 'HR' && selectedRequest.status === 'PENDING') ||
+        (currentUser.role === 'IT' && selectedRequest.currentStage === 'IT' && selectedRequest.status === 'PENDING') ||
+        (currentUser.role === 'GENERAL_MANAGER' && selectedRequest.currentStage === 'GENERAL_MANAGER' && selectedRequest.status === 'PENDING') ||
+        (currentUser.role === 'CEO' && (selectedRequest.currentStage === 'CEO' || selectedRequest.status === 'ESCALATED') && selectedRequest.status !== 'APPROVED' && selectedRequest.status !== 'REJECTED')
+      );
+
+      return (
+        <div className="flex h-full bg-slate-50">
+          <aside className="w-48 bg-white border-r border-slate-100 flex flex-col flex-shrink-0">
+            <div className="px-3.5 pt-4 pb-3 border-b border-slate-100">
+              <p className="text-xs font-bold text-blue-600 tracking-wider uppercase">NORTHSTAR</p>
+            </div>
+            <nav className="flex-1 px-2 py-2.5 space-y-0.5 overflow-y-auto">
+              {navTabs.map(t => (
+                <button
+                  key={t.key}
+                  onClick={() => { setActiveTab(t.key); setSelectedRequest(null); }}
+                  className={`flex items-center gap-2.5 w-full text-left px-2.5 py-2 rounded-lg text-xs font-medium transition ${
+                    activeTab === t.key ? 'bg-blue-50 text-blue-700 font-semibold border-r-[3px] border-blue-600' : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
+                  }`}
+                >
+                  <Icon name={t.icon} className={`w-4 h-4 flex-shrink-0 ${activeTab === t.key ? 'text-blue-600' : 'text-slate-400'}`} />
+                  <span className="truncate">{t.label}</span>
+                </button>
+              ))}
+            </nav>
+          </aside>
+
+          <div className="flex-1 flex flex-col overflow-hidden">
+            <header className="flex items-center justify-between px-5 py-2.5 bg-white border-b border-slate-100 flex-shrink-0">
+              <div className="flex items-center gap-2">
+                <SrmLogo size={28} />
+                <span className="text-sm font-bold text-slate-800 tracking-tight">Northstar Workflow</span>
+              </div>
+              <div className="flex items-center gap-3">
+                <div className="text-right">
+                  <p className="text-xs font-semibold text-slate-800">{currentUser.name} <span className="text-blue-600 font-bold">({currentUser.role})</span></p>
+                  <p className="text-[11px] text-slate-400">{currentUser.dept} - {currentUser.campus}</p>
+                </div>
+                <button onClick={() => setCurrentUser(null)} title="Logout" className="p-1.5 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-50 transition cursor-pointer">
+                  <Icon name="logout" className="w-4 h-4" />
+                </button>
+              </div>
+            </header>
+
+            <main className="flex-1 overflow-y-auto">
+              {/* 1. Dashboard */}
+              {activeTab === 'dashboard' && (
+                <div className="px-6 py-6">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-6 bg-white p-4 rounded-xl border border-slate-200/80 shadow-2xs">
+                    <div>
+                      <h1 className="text-2xl font-bold text-slate-900 tracking-tight mb-0.5">{getRoleDisplayName(currentUser.role)} Dashboard</h1>
+                      <p className="text-xs text-slate-500">Welcome, <strong>{currentUser.name}</strong> · {currentUser.dept} ({currentUser.campus})</p>
+                    </div>
+                    <div className="flex items-center gap-2 bg-slate-50 border border-slate-200 rounded-lg px-3 py-2">
+                      <span className={`w-2.5 h-2.5 rounded-full ${isBusinessTime ? 'bg-green-500 animate-ping' : 'bg-slate-400'}`} />
+                      <div className="text-left">
+                        <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500">6-HOUR BUSINESS SLA</p>
+                        <p className="text-xs font-semibold text-slate-700">{isBusinessTime ? '🟢 Active (9:00 AM – 5:00 PM Mon-Fri)' : '🌙 Paused (Off Business Hours)'}</p>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3.5 mb-8">
+                    <MetricCard icon="total" iconBg="bg-blue-50" iconColor="text-blue-600" label={currentUser.role === 'REQUESTER' ? 'My Requests' : 'In My Queue'} value={currentUser.role === 'REQUESTER' ? total : pendingAtMyStage} desc="Action items" onClick={() => { setActiveTab('all-requests'); setStatusFilter('PENDING'); }} />
+                    <MetricCard icon="clock" iconBg="bg-yellow-50" iconColor="text-yellow-600" label="Pending Total" value={requests.filter(r => r.status === 'PENDING').length} desc="Across all roles" onClick={() => { setActiveTab('all-requests'); setStatusFilter('PENDING'); }} />
+                    <MetricCard icon="check" iconBg="bg-green-50" iconColor="text-green-600" label="Approved" value={approved} desc="Completed by CEO" onClick={() => { setActiveTab('all-requests'); setStatusFilter('APPROVED'); }} />
+                    <MetricCard icon="warning" iconBg="bg-red-50" iconColor="text-red-500" label="Rejected" value={rejected} desc="Denied requests" onClick={() => { setActiveTab('all-requests'); setStatusFilter('REJECTED'); }} />
+                    <MetricCard icon="chat" iconBg="bg-orange-50" iconColor="text-orange-600" label="Queries" value={queries} desc="Clarifications" onClick={() => setActiveTab('queries')} />
+                    <MetricCard icon="warning" iconBg="bg-purple-50" iconColor="text-purple-600" label="SLA Alert (>6h)" value={escalated} desc="Exceeded 6 hours" onClick={() => { setActiveTab('all-requests'); setStatusFilter('ESCALATED'); }} />
+                  </div>
+
+                  <div className="bg-white rounded-xl border border-slate-100 shadow-sm overflow-hidden">
+                    <div className="flex items-center justify-between px-5 py-4 border-b border-slate-100">
+                      <h2 className="text-base font-bold text-slate-800">Real-Time Request Stages &amp; Handlers</h2>
+                      <button onClick={() => setActiveTab('all-requests')} className="text-xs font-semibold text-blue-600 hover:text-blue-700 cursor-pointer">View All →</button>
+                    </div>
+                    <div>
+                      {visibleRequests.slice(0, 6).map((req, idx) => (
+                        <button key={req.id} onClick={() => { setSelectedRequest(req); setActiveTab('all-requests'); }} className={`w-full text-left flex items-center justify-between px-5 py-4 hover:bg-slate-50 transition ${idx === 0 ? '' : 'border-t border-slate-100'}`}>
+                          <div>
+                            <div className="flex items-center gap-2">
+                              <p className="text-sm font-semibold text-blue-600 hover:underline">{req.title}</p>
+                              <span className="text-[10px] font-bold bg-indigo-100 text-indigo-800 px-2 py-0.5 rounded border border-indigo-200">📍 Stage: {req.currentStage.replace('_', ' ')}</span>
+                            </div>
+                            <p className="text-xs text-slate-500 mt-1">{req.department} · {req.requester} · Handler: <strong>{getStageActorName(req.currentStage)}</strong></p>
+                            <p className="text-xs text-slate-400 mt-0.5">{formatINR(req.amount)} · {req.date}</p>
+                          </div>
+                          <div className="flex items-center gap-2 flex-shrink-0">
+                            {req.businessHoursIdle >= 6 && <span className="text-[10px] bg-red-100 text-red-700 font-bold px-2 py-0.5 rounded-full animate-pulse border border-red-200">🚨 &gt;6h SLA Exceeded</span>}
+                            <StatusBadge status={req.status} />
+                            <Icon name="chevron" className="w-4 h-4 text-slate-300" />
+                          </div>
+                        </button>
+                      ))}
+                      {visibleRequests.length === 0 && <div className="py-12 text-center text-slate-400 text-sm">No requests in queue.</div>}
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* 2. All Requests */}
+              {activeTab === 'all-requests' && (
+                <div className="flex h-full">
+                  <div className={`${selectedRequest ? 'hidden md:flex' : 'flex'} flex-col w-full md:w-96 border-r border-slate-100 flex-shrink-0 overflow-hidden bg-white`}>
+                    <div className="px-5 py-4 border-b border-slate-100 bg-white">
+                      <div className="flex items-center justify-between mb-3">
+                        <h2 className="text-base font-bold text-slate-800">All Tracked Requests</h2>
+                        <span className="text-[11px] font-semibold text-slate-400 bg-slate-100 px-2 py-0.5 rounded-full">{filteredRequests.length} Requests</span>
+                      </div>
+                      <div className="flex gap-1.5 flex-wrap">
+                        {['ALL', 'PENDING', 'APPROVED', 'REJECTED', 'QUERIED', 'ESCALATED'].map(sf => (
+                          <button key={sf} onClick={() => setStatusFilter(sf)} className={`px-2.5 py-1 rounded-full text-xs font-medium transition ${statusFilter === sf ? 'bg-blue-600 text-white shadow-xs font-semibold' : 'bg-slate-100 text-slate-500 hover:bg-slate-200'}`}>{sf}</button>
+                        ))}
+                      </div>
+                    </div>
+                    <div className="flex-1 overflow-y-auto bg-white">
+                      {filteredRequests.map((r, idx) => (
+                        <button key={r.id} onClick={() => { setSelectedRequest(r); setActionSuccessMsg(''); }} className={`w-full text-left px-5 py-3.5 hover:bg-blue-50/50 transition ${idx === 0 ? '' : 'border-t border-slate-100'} ${selectedRequest?.id === r.id ? 'bg-blue-50 border-l-4 border-l-blue-600' : ''}`}>
+                          <div className="flex items-start justify-between gap-2 mb-1">
+                            <p className="text-sm font-semibold text-slate-800 line-clamp-1">{r.title}</p>
+                            <StatusBadge status={r.status} />
+                          </div>
+
+                          <div className="flex items-center gap-1.5 flex-wrap my-1.5">
+                            <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-indigo-100 text-indigo-800 border border-indigo-200">
+                              📍 Stage: {r.currentStage.replace('_', ' ')}
+                            </span>
+                            {r.businessHoursIdle >= 6 && r.status === 'PENDING' && (
+                              <span className="bg-red-100 text-red-700 text-[10px] font-bold px-1.5 py-0.5 rounded border border-red-200 animate-pulse">
+                                🚨 &gt;6h SLA Exceeded
+                              </span>
+                            )}
+                          </div>
+
+                          <div className="flex items-center justify-between text-xs text-slate-500 mt-1">
+                            <span>{r.department}</span>
+                            <span className="text-slate-400 font-medium">{formatINR(r.amount)}</span>
+                          </div>
+
+                          <div className="flex items-center justify-between mt-1.5 text-[11px] text-slate-400">
+                            <span>Requester: <strong className="text-slate-600">{r.requester}</strong></span>
+                            {r.status === 'PENDING' && (
+                              <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full flex items-center gap-1 ${r.businessHoursIdle >= 6 ? 'bg-red-100 text-red-700 font-bold animate-pulse' : 'bg-slate-100 text-slate-500'}`}>
+                                ⏱️ {r.businessHoursIdle}h / 6h SLA
+                              </span>
+                            )}
+                          </div>
+                        </button>
+                      ))}
+                      {filteredRequests.length === 0 && <div className="py-12 text-center text-slate-400 text-sm">No requests found.</div>}
+                    </div>
+                  </div>
+
+                  {selectedRequest ? (
+                    <div className="flex-1 overflow-y-auto bg-slate-50 p-6">
+                      <button onClick={() => setSelectedRequest(null)} className="md:hidden flex items-center gap-1 text-sm text-blue-600 mb-4 font-medium">← Back to list</button>
+
+                      {/* 6-HOUR SLA BREACH ALERT BANNER */}
+                      {selectedRequest.businessHoursIdle >= 6 && (
+                        <div className="mb-4 bg-gradient-to-r from-red-50 to-orange-50 border-2 border-red-300 rounded-xl p-4 flex items-center justify-between gap-3 text-red-900 shadow-sm animate-in fade-in">
+                          <div className="flex items-center gap-3">
+                            <div className="w-10 h-10 rounded-full bg-red-600 text-white flex items-center justify-center font-bold text-lg flex-shrink-0 animate-bounce">
+                              ⚠️
+                            </div>
+                            <div>
+                              <div className="flex items-center gap-2">
+                                <p className="text-xs font-black uppercase tracking-wider text-red-700">
+                                  🚨 6-HOUR SLA BREACH ALERT: EXCEEDED AT {getRoleDisplayName(selectedRequest.currentStage).toUpperCase()}
+                                </p>
+                                <span className="bg-red-600 text-white text-[10px] font-bold px-2 py-0.5 rounded">
+                                  {selectedRequest.businessHoursIdle}h / 6h LIMIT
+                                </span>
+                              </div>
+                              <p className="text-xs text-red-700 mt-1 font-medium">
+                                Idle for <strong>{selectedRequest.businessHoursIdle} business hours</strong> under <strong>{getStageActorName(selectedRequest.currentStage)}</strong> during active Mon-Fri 9AM-5PM hours. Urgent action is required.
+                              </p>
+                            </div>
+                          </div>
+                          <span className="bg-red-600 text-white text-[11px] font-bold px-3.5 py-1.5 rounded-lg uppercase tracking-wider flex-shrink-0">
+                            6-HR SLA ALERT
+                          </span>
+                        </div>
+                      )}
+
+                      {/* PROMINENT ACTIVE STAGE & HANDLER BANNER */}
+                      <div className="mb-4 bg-gradient-to-r from-blue-900 to-indigo-900 text-white rounded-xl p-4 shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                        <div className="flex items-center gap-3">
+                          <div className="w-10 h-10 rounded-xl bg-white/10 border border-white/20 flex items-center justify-center text-lg flex-shrink-0">
+                            📍
+                          </div>
+                          <div>
+                            <p className="text-[10px] font-bold text-blue-200 uppercase tracking-widest">CURRENT APPROVAL STAGE</p>
+                            <h3 className="text-base font-bold text-white tracking-tight">
+                              {getRoleDisplayName(selectedRequest.currentStage)}
+                            </h3>
+                            <p className="text-xs text-blue-100">
+                              Currently Handled by: <strong>{getStageActorName(selectedRequest.currentStage)}</strong>
+                            </p>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-2 flex-shrink-0">
+                          <span className={`px-3 py-1 rounded-lg text-xs font-bold ${
+                            selectedRequest.status === 'APPROVED' ? 'bg-green-500 text-white' : selectedRequest.status === 'REJECTED' ? 'bg-red-500 text-white' : 'bg-blue-500 text-white'
+                          }`}>
+                            STATUS: {selectedRequest.status}
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Stage Progress Stepper */}
+                      <div className="bg-white rounded-xl border border-slate-100 shadow-sm p-4 mb-4">
+                        <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">APPROVAL HIERARCHY PROGRESS: REQUESTER (HOD) → MANAGER (HR / IT / FINANCE → ACCOUNTANT) → GM → CEO</p>
+                        <div className="flex flex-wrap items-center gap-2">
+                          {getStageList(selectedRequest).map((st, sIdx, arr) => {
+                            const isCurrent = selectedRequest.currentStage === st && selectedRequest.status !== 'APPROVED';
+                            const isPassed = selectedRequest.status === 'APPROVED' || arr.indexOf(selectedRequest.currentStage) > sIdx;
+                            return (
+                              <React.Fragment key={st}>
+                                <span className={`inline-flex items-center gap-1 px-3 py-1 rounded-md text-xs font-semibold border transition-all ${isCurrent ? 'bg-blue-600 text-white border-blue-600 shadow-md ring-2 ring-blue-400/40 font-bold scale-105' : isPassed ? 'bg-green-50 text-green-700 border-green-200' : 'bg-slate-50 text-slate-400 border-slate-200'}`}>
+                                  {isPassed && '✓ '} {st.replace('_', ' ')}
+                                </span>
+                                {sIdx < arr.length - 1 && <span className="text-slate-300 font-bold text-xs">→</span>}
+                              </React.Fragment>
+                            );
+                          })}
+                        </div>
+                      </div>
+
+                      {/* Request Header Card */}
+                      <div className="bg-white rounded-xl border border-slate-100 shadow-sm overflow-hidden mb-4">
+                        <div className="flex items-start justify-between gap-4 px-6 pt-5 pb-4 border-b border-slate-100">
+                          <div>
+                            <div className="flex items-center gap-2 mb-1.5 flex-wrap">
+                              <span className="text-xs font-mono font-bold text-blue-600 bg-blue-50 px-2 py-0.5 rounded">{selectedRequest.id}</span>
+                              <span className="text-xs text-slate-500 font-semibold bg-slate-100 px-2 py-0.5 rounded">{selectedRequest.category}</span>
+                              <span className="text-xs font-bold text-indigo-700 bg-indigo-50 border border-indigo-200 px-2.5 py-0.5 rounded">Active Handler: {getStageActorName(selectedRequest.currentStage)}</span>
+                            </div>
+                            <h2 className="text-lg font-bold text-slate-900">{selectedRequest.title}</h2>
+                            <p className="text-xs text-slate-500 mt-1">Submitted by <strong className="text-slate-700">{selectedRequest.requester}</strong> ({selectedRequest.department} · {selectedRequest.campus || currentUser.campus})</p>
+                          </div>
+                          <div className="text-right flex-shrink-0">
+                            <p className="text-2xl font-bold text-slate-900">{formatINR(selectedRequest.amount)}</p>
+                            <p className="text-xs text-slate-400 mt-0.5">{selectedRequest.date}</p>
+                            <div className="mt-2"><StatusBadge status={selectedRequest.status} /></div>
+                          </div>
+                        </div>
+
+                        {/* 6-Hour Business SLA Info */}
+                        <div className="bg-slate-50/80 px-6 py-3 border-b border-slate-100 grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+                          <div>
+                            <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">6-HOUR BUSINESS SLA POLICY</p>
+                            <p className="font-semibold text-slate-700 mt-0.5">⏱️ 6 Hours Threshold per Role Stage</p>
+                            <p className="text-[10px] text-slate-400 mt-0.5">{isBusinessTime ? '🟢 SLA Clock Running (9AM-5PM Mon-Fri)' : '🌙 Paused (Off Business Hours)'}</p>
+                          </div>
+                          <div>
+                            <div className="flex items-center justify-between mb-1">
+                              <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">6-HOUR SLA PROGRESS</p>
+                              <span className={`font-mono text-[11px] font-bold ${selectedRequest.businessHoursIdle >= 6 ? 'text-red-600 animate-pulse' : 'text-slate-600'}`}>
+                                {selectedRequest.businessHoursIdle}h / 6.0h SLA Limit
+                              </span>
+                            </div>
+                            <div className="w-full bg-slate-200 h-2 rounded-full overflow-hidden">
+                              <div className={`h-full rounded-full transition-all ${selectedRequest.businessHoursIdle >= 6 ? 'bg-red-600' : selectedRequest.businessHoursIdle >= 4.5 ? 'bg-amber-500' : 'bg-blue-500'}`} style={{ width: `${Math.min(100, (selectedRequest.businessHoursIdle / 6) * 100)}%` }} />
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="px-6 py-4 border-b border-slate-100">
+                          <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-1.5">Description & Justification</p>
+                          <p className="text-sm text-slate-700 leading-relaxed">{selectedRequest.description}</p>
+                        </div>
+
+                        {/* Attached Documents */}
+                        <div className="px-6 py-4 bg-slate-50/50">
+                          <p className="text-xs font-bold text-slate-700 uppercase tracking-wider mb-2.5">📎 Relevant Documents & Attachments ({selectedRequest.attachments?.length || 0})</p>
+                          {selectedRequest.attachments && selectedRequest.attachments.length > 0 ? (
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                              {selectedRequest.attachments.map((doc, dIdx) => (
+                                <div key={dIdx} className="bg-white border border-slate-200/80 rounded-lg p-3 flex items-center justify-between shadow-2xs hover:border-blue-400 transition">
+                                  <div className="flex items-center gap-2.5 overflow-hidden">
+                                    <div className="w-8 h-8 rounded bg-blue-50 text-blue-700 border border-blue-100 flex items-center justify-center text-xs font-bold flex-shrink-0">{doc.type}</div>
+                                    <div className="overflow-hidden">
+                                      <p className="text-xs font-semibold text-slate-800 truncate">{doc.name}</p>
+                                      <p className="text-[10px] text-slate-400">{doc.size} · Verified Proof</p>
+                                    </div>
+                                  </div>
+                                  <button onClick={() => setViewingDocument(doc)} className="flex items-center gap-1 bg-blue-50 hover:bg-blue-600 hover:text-white text-blue-700 text-xs font-semibold px-2.5 py-1.5 rounded-md transition flex-shrink-0 cursor-pointer">
+                                    <Icon name="eye" className="w-3.5 h-3.5" /> View
+                                  </button>
+                                </div>
+                              ))}
+                            </div>
+                          ) : (
+                            <p className="text-xs text-slate-400 italic">No document files attached.</p>
+                          )}
+                        </div>
+                      </div>
+
+                      {selectedRequest.query && (
+                        <div className="bg-orange-50 border border-orange-200 rounded-xl px-5 py-4 mb-4">
+                          <p className="text-xs font-bold text-orange-700 uppercase tracking-wider mb-1">CLARIFICATION QUERY</p>
+                          <p className="text-sm text-orange-900 font-medium">{selectedRequest.query}</p>
+                        </div>
+                      )}
+
+                      {/* Action Section */}
+                      <div className="bg-white rounded-xl border border-slate-100 shadow-sm px-6 py-5 mb-4">
+                        <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-4">Action Center ({getRoleDisplayName(currentUser.role)})</p>
+
+                        {/* Success Message Banner */}
+                        {actionSuccessMsg && (
+                          <div className="bg-green-50 border border-green-200 rounded-xl p-4 mb-4 flex items-center gap-3 text-green-800">
+                            <Icon name="check" className="w-5 h-5 text-green-600 flex-shrink-0" />
+                            <div>
+                              <p className="text-xs font-bold text-green-900 uppercase">Action Completed</p>
+                              <p className="text-xs text-green-700 mt-0.5">{actionSuccessMsg}</p>
+                            </div>
+                          </div>
+                        )}
+
+                        {/* REQUESTER: Revise Request */}
+                        {currentUser.role === 'REQUESTER' && selectedRequest.status === 'QUERIED' && (
+                          <div className="space-y-4">
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                              <div>
+                                <label className="block text-xs font-semibold text-slate-600 uppercase mb-1">Revised Title</label>
+                                <input type="text" value={revisedTitle} onChange={e => setRevisedTitle(e.target.value)} className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                              </div>
+                              <div>
+                                <label className="block text-xs font-semibold text-slate-600 uppercase mb-1">Revised Amount (INR)</label>
+                                <input type="number" value={revisedAmount} onChange={e => setRevisedAmount(e.target.value)} className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                              </div>
+                            </div>
+                            <div>
+                              <label className="block text-xs font-semibold text-slate-600 uppercase mb-1">Clarification Response <span className="text-red-400">*</span></label>
+                              <textarea rows={3} value={responseExplanation} onChange={e => setResponseExplanation(e.target.value)} className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none" placeholder="Provide explanation..." />
+                            </div>
+                            <button
+                              onClick={() => {
+                                if (responseExplanation.trim()) {
+                                  handleUpdateStatus(selectedRequest.id, 'PENDING', `Requester revised request & responded: "${responseExplanation.trim()}"`, {
+                                    title: revisedTitle.trim() || selectedRequest.title,
+                                    amount: parseInt(revisedAmount, 10) || selectedRequest.amount,
+                                    query: undefined
+                                  });
+                                  setActionSuccessMsg('Your revised request was resubmitted back to the queue.');
+                                  setResponseExplanation('');
+                                }
+                              }}
+                              disabled={!responseExplanation.trim()}
+                              className="bg-orange-500 hover:bg-orange-600 disabled:opacity-50 text-white text-xs font-semibold px-5 py-2.5 rounded-lg transition shadow-xs cursor-pointer"
+                            >
+                              Submit Revision & Resubmit to Queue
+                            </button>
+                          </div>
+                        )}
+
+                        {/* MANAGER: Explicit Branch Selection to HR, IT, or FINANCE */}
+                        {currentUser.role === 'MANAGER' && selectedRequest.currentStage === 'MANAGER' && selectedRequest.status === 'PENDING' && (
+                          <div className="space-y-4 bg-blue-50/40 p-4 rounded-xl border border-blue-100">
+                            <div className="mb-2">
+                              <p className="text-xs font-bold text-slate-800 uppercase tracking-wider">👉 Manager Branch Routing Decision:</p>
+                              <p className="text-xs text-slate-500 mt-0.5">Select which department branch to route this request to:</p>
+                            </div>
+
+                            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                              <button type="button" onClick={() => setSelectedBranch('HR')} className={`p-3 rounded-lg border text-left transition cursor-pointer ${selectedBranch === 'HR' ? 'bg-pink-50 border-pink-500 text-pink-900 ring-2 ring-pink-400/30' : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50'}`}>
+                                <p className="text-xs font-bold">🏢 HR Department</p>
+                                <p className="text-[10px] text-slate-500 mt-0.5">Routes to HR Head</p>
+                              </button>
+                              <button type="button" onClick={() => setSelectedBranch('IT')} className={`p-3 rounded-lg border text-left transition cursor-pointer ${selectedBranch === 'IT' ? 'bg-blue-50 border-blue-500 text-blue-900 ring-2 ring-blue-400/30' : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50'}`}>
+                                <p className="text-xs font-bold">💻 IT Department</p>
+                                <p className="text-[10px] text-slate-500 mt-0.5">Routes to IT Head</p>
+                              </button>
+                              <button type="button" onClick={() => setSelectedBranch('FINANCE')} className={`p-3 rounded-lg border text-left transition cursor-pointer ${selectedBranch === 'FINANCE' ? 'bg-yellow-50 border-yellow-500 text-yellow-900 ring-2 ring-yellow-400/30' : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50'}`}>
+                                <p className="text-xs font-bold">💰 Finance Directorate</p>
+                                <p className="text-[10px] text-slate-500 mt-0.5">Routes to Finance Head first</p>
+                              </button>
+                            </div>
+
+                            <div className="flex gap-3 pt-2">
+                              <button
+                                onClick={() => {
+                                  const nextStage = selectedBranch === 'HR' ? 'HR' : selectedBranch === 'IT' ? 'IT' : 'FINANCE';
+                                  const targetName = selectedBranch === 'HR' ? 'HR Head' : selectedBranch === 'IT' ? 'IT Head' : 'Finance Head';
+                                  handleAdvanceStage(selectedRequest.id, nextStage, `Manager verified request and routed to ${targetName}`);
+                                  setActionSuccessMsg(`✓ Request successfully approved and routed to ${targetName}! It is now in their queue.`);
+                                }}
+                                className="flex items-center gap-2 bg-green-600 hover:bg-green-700 text-white text-xs font-semibold px-5 py-2.5 rounded-lg transition shadow-xs cursor-pointer"
+                              >
+                                <Icon name="check" className="w-4 h-4" /> Approve & Route to {selectedBranch === 'FINANCE' ? 'Finance Head' : selectedBranch}
+                              </button>
+                              <button onClick={() => { handleUpdateStatus(selectedRequest.id, 'REJECTED', 'Request rejected by Line Manager'); setActionSuccessMsg('Request was rejected.'); }} className="flex items-center gap-2 bg-red-500 hover:bg-red-600 text-white text-xs font-semibold px-4 py-2.5 rounded-lg transition shadow-xs cursor-pointer">
+                                <Icon name="x" className="w-4 h-4" /> Reject
+                              </button>
+                            </div>
+
+                            <div className="space-y-2 pt-2 border-t border-slate-100">
+                              <p className="text-xs font-semibold text-slate-700">Request Clarification from Requester</p>
+                              <textarea rows={2} value={queryText} onChange={e => setQueryText(e.target.value)} className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-orange-400 resize-none bg-white" placeholder="Ask requester for details before routing..." />
+                              <button onClick={() => { if (queryText.trim()) { handleUpdateStatus(selectedRequest.id, 'QUERIED', `Query raised by Manager: "${queryText.trim()}"`, { query: queryText.trim() }); setActionSuccessMsg('Query sent to requester.'); setQueryText(''); } }} className="bg-orange-500 hover:bg-orange-600 text-white text-xs font-semibold px-4 py-2 rounded-lg transition cursor-pointer">Send Query</button>
+                            </div>
+                          </div>
+                        )}
+
+                        {/* HIGHER AUTHORITY FLAGGED DECISION (CEO / GM when request is flagged >6h) */}
+                        {(currentUser.role === 'CEO' || currentUser.role === 'GENERAL_MANAGER') && selectedRequest.businessHoursIdle >= 6 && selectedRequest.status === 'PENDING' && (
+                          <div className="space-y-3 bg-amber-50/60 p-4 rounded-xl border border-amber-200 mb-4">
+                            <div>
+                              <p className="text-xs font-bold text-amber-900 uppercase">👑 Higher Authority Flagged Request Decision:</p>
+                              <p className="text-xs text-amber-700 mt-0.5">This request was flagged due to delay at {getRoleDisplayName(selectedRequest.currentStage)}. Decide whether to flag & forward to next official, send a query, or grant clearance:</p>
+                            </div>
+                            <div className="flex gap-2 flex-wrap">
+                              <button
+                                onClick={() => {
+                                  const next = getNextStage(selectedRequest.category, selectedRequest.currentStage);
+                                  if (next === 'COMPLETED' || currentUser.role === 'CEO') {
+                                    handleUpdateStatus(selectedRequest.id, 'APPROVED', `Executive Clearance granted by Higher Authority (${currentUser.name})`, { currentStage: 'COMPLETED' });
+                                    setActionSuccessMsg('Executive clearance granted.');
+                                  } else {
+                                    handleAdvanceStage(selectedRequest.id, next, `Flagged & Forwarded to ${getRoleDisplayName(next)} by Higher Authority decision`);
+                                    setActionSuccessMsg(`✓ Higher Authority decision: Flagged and forwarded to ${getRoleDisplayName(next)}.`);
+                                  }
+                                }}
+                                className="bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold px-4 py-2 rounded-lg transition cursor-pointer"
+                              >
+                                🚩 Flag & Forward to Next Official ({getRoleDisplayName(getNextStage(selectedRequest.category, selectedRequest.currentStage))})
+                              </button>
+                              <button
+                                onClick={() => {
+                                  handleUpdateStatus(selectedRequest.id, 'APPROVED', `Direct Approval granted by Higher Authority (${currentUser.name})`, { currentStage: 'COMPLETED' });
+                                  setActionSuccessMsg('Direct executive approval granted.');
+                                }}
+                                className="bg-green-600 hover:bg-green-700 text-white text-xs font-bold px-4 py-2 rounded-lg transition cursor-pointer"
+                              >
+                                Grant Direct Clearance
+                              </button>
+                            </div>
+                          </div>
+                        )}
+
+                        {/* OTHER APPROVERS (FINANCE, ACCOUNTANT, HR, IT, GM, CEO) */}
+                        {isMyTurnToApprove && currentUser.role !== 'MANAGER' && (
+                          <div className="space-y-4">
+                            <div className="flex gap-3 flex-wrap">
+                              <button
+                                onClick={() => {
+                                  const next = getNextStage(selectedRequest.category, selectedRequest.currentStage);
+                                  if (next === 'COMPLETED' || currentUser.role === 'CEO') {
+                                    handleUpdateStatus(selectedRequest.id, 'APPROVED', `Final approval granted by ${currentUser.name} (${getRoleDisplayName(currentUser.role)})`, { currentStage: 'COMPLETED' });
+                                    setActionSuccessMsg(`✓ Final Approval granted by CEO! Request is completed.`);
+                                  } else {
+                                    handleAdvanceStage(selectedRequest.id, next, `Approved by ${currentUser.name} (${getRoleDisplayName(currentUser.role)}) → Forwarded to ${getRoleDisplayName(next)}`);
+                                    setActionSuccessMsg(`✓ Request approved and successfully forwarded to ${getRoleDisplayName(next)}!`);
+                                  }
+                                }}
+                                className="flex items-center gap-2 bg-green-600 hover:bg-green-700 text-white text-xs font-semibold px-4 py-2.5 rounded-lg transition shadow-xs cursor-pointer"
+                              >
+                                <Icon name="check" className="w-4 h-4" />
+                                {currentUser.role === 'CEO' || getNextStage(selectedRequest.category, selectedRequest.currentStage) === 'COMPLETED' ? 'Grant Final Approval' : `Approve & Forward to ${getRoleDisplayName(getNextStage(selectedRequest.category, selectedRequest.currentStage))}`}
+                              </button>
+                              <button onClick={() => { handleUpdateStatus(selectedRequest.id, 'REJECTED', `Request rejected by ${currentUser.name} (${getRoleDisplayName(currentUser.role)})`); setActionSuccessMsg('Request was rejected.'); }} className="flex items-center gap-2 bg-red-500 hover:bg-red-600 text-white text-xs font-semibold px-4 py-2.5 rounded-lg transition shadow-xs cursor-pointer">
+                                <Icon name="x" className="w-4 h-4" /> Reject
+                              </button>
+                            </div>
+
+                            <div className="space-y-2 pt-2 border-t border-slate-100">
+                              <p className="text-xs font-semibold text-slate-700">Request Clarification</p>
+                              <textarea rows={2} value={queryText} onChange={e => setQueryText(e.target.value)} className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-orange-400 resize-none" placeholder="Ask requester for clarification..." />
+                              <button onClick={() => { if (queryText.trim()) { handleUpdateStatus(selectedRequest.id, 'QUERIED', `Query raised by ${currentUser.name} (${getRoleDisplayName(currentUser.role)}): "${queryText.trim()}"`, { query: queryText.trim() }); setActionSuccessMsg('Query sent to requester.'); setQueryText(''); } }} className="bg-orange-500 hover:bg-orange-600 text-white text-xs font-semibold px-4 py-2 rounded-lg transition cursor-pointer">Send Query</button>
+                            </div>
+
+                            {selectedRequest.businessHoursIdle >= 6 && selectedRequest.status !== 'ESCALATED' && (
+                              <div className="pt-2 border-t border-slate-100">
+                                <button onClick={() => { handleUpdateStatus(selectedRequest.id, 'ESCALATED', `⚠️ 6-Hour Business SLA Breached (>6h idle) — Escalated to CEO by ${currentUser.name}`, { currentStage: 'CEO' }); setActionSuccessMsg('Request escalated to CEO due to 6-hour Business SLA breach.'); }} className="flex items-center gap-2 bg-red-600 hover:bg-red-700 text-white text-xs font-semibold px-4 py-2.5 rounded-lg transition shadow-xs cursor-pointer">
+                                  <Icon name="warning" className="w-4 h-4" /> Escalate to CEO (6h SLA Breach)
+                                </button>
+                              </div>
+                            )}
+                          </div>
+                        )}
+
+                        {/* Informative message when viewing request at another role's stage */}
+                        {!isMyTurnToApprove && !actionSuccessMsg && selectedRequest.status === 'PENDING' && (
+                          <div className="bg-indigo-50/70 border border-indigo-100 rounded-lg p-3 text-xs text-indigo-900 flex items-center gap-2">
+                            <span className="text-base">📍</span>
+                            <span>This request is currently in the <strong>{getRoleDisplayName(selectedRequest.currentStage)}</strong> stage, handled by <strong>{getStageActorName(selectedRequest.currentStage)}</strong>.</span>
+                          </div>
+                        )}
+
+                        {(selectedRequest.status === 'APPROVED' || selectedRequest.status === 'REJECTED') && (
+                          <div className={`rounded-lg px-4 py-3 text-xs font-medium ${selectedRequest.status === 'APPROVED' ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'}`}>
+                            ✓ This request is <strong>{selectedRequest.status.toLowerCase()}</strong> and closed.
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Audit Trail */}
+                      <div className="bg-white rounded-xl border border-slate-100 shadow-sm px-6 py-5">
+                        <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-4">Multi-Tier Audit Trail</p>
+                        <div className="space-y-4 relative before:absolute before:left-2 before:top-2 before:bottom-2 before:w-px before:bg-slate-100">
+                          {selectedRequest.auditTrail.filter(entry => {
+                            const act = entry.action.toLowerCase();
+                            return !act.includes('query raised') && !act.includes('clarification response') && !act.includes('query:');
+                          }).map((entry, i) => (
+                            <div key={i} className="flex gap-4 pl-6 relative">
+                              <span className="absolute left-0 top-1.5 w-[9px] h-[9px] rounded-full bg-blue-500 border-2 border-white ring-1 ring-blue-200" />
+                              <div>
+                                <p className="text-xs font-medium text-slate-800">{entry.action}</p>
+                                <p className="text-[11px] text-slate-400 mt-0.5">{entry.ts} · <span className="text-blue-600 font-semibold">{entry.actor}</span></p>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="flex-1 hidden md:flex items-center justify-center text-slate-400 flex-col gap-3">
+                      <Icon name="requests" className="w-12 h-12 text-slate-200" />
+                      <p className="text-sm">Select a request to review and track stages</p>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* 3. Create Request */}
+              {activeTab === 'create-request' && currentUser.role === 'REQUESTER' && (
+                <div className="px-6 py-6 max-w-2xl">
+                  <h1 className="text-2xl font-bold text-slate-900 mb-1">Create New Request</h1>
+                  <p className="text-sm text-slate-400 mb-6">Submit request with supporting quotations or documents.</p>
+                  {isCreated ? (
+                    <div className="bg-green-50 border border-green-200 rounded-xl px-6 py-8 text-center">
+                      <p className="text-green-700 font-semibold">Request submitted to Manager in queue!</p>
+                    </div>
+                  ) : (
+                    <form onSubmit={handleCreateRequest} className="bg-white rounded-xl border border-slate-100 shadow-sm px-6 py-6 space-y-5">
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wide mb-1.5">Request Title *</label>
+                        <input type="text" value={title} onChange={e => setTitle(e.target.value)} required className="w-full border border-slate-200 rounded-lg px-3.5 py-2.5 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="e.g. Purchase of Lab GPU Workstations" />
+                      </div>
+                      <div className="grid grid-cols-2 gap-4">
+                        <div>
+                          <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wide mb-1.5">Category</label>
+                          <select value={category} onChange={e => setCategory(e.target.value)} className="w-full border border-slate-200 rounded-lg px-3.5 py-2.5 text-sm text-slate-800 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500">
+                            {['Academic', 'Procurement', 'Training', 'Facilities', 'Finance', 'HR', 'IT'].map(c => <option key={c} value={c}>{c}</option>)}
+                          </select>
+                        </div>
+                        <div>
+                          <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wide mb-1.5">Amount (INR) *</label>
+                          <input type="number" value={amount} onChange={e => setAmount(e.target.value)} required min="1" className="w-full border border-slate-200 rounded-lg px-3.5 py-2.5 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="e.g. 150000" />
+                        </div>
+                      </div>
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wide mb-1.5">Description & Purpose *</label>
+                        <textarea rows={3} value={description} onChange={e => setDescription(e.target.value)} required className="w-full border border-slate-200 rounded-lg px-3.5 py-2.5 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none" placeholder="Provide justification or specs…" />
+                      </div>
+
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wide mb-1.5">Attach Relevant Quotations / Documents</label>
+                        <div className="border-2 border-dashed border-slate-200 hover:border-blue-400 rounded-xl p-4 text-center bg-slate-50/60 transition group cursor-pointer relative">
+                          <input type="file" multiple accept=".pdf,.doc,.docx,.png,.jpg,.jpeg,.xlsx" onChange={handleFileSelect} className="absolute inset-0 opacity-0 cursor-pointer w-full h-full" />
+                          <p className="text-xs font-semibold text-slate-700">Click or drag files here to attach</p>
+                          <p className="text-[10px] text-slate-400">Supports PDF, Word, Quotations, Invoices</p>
+                        </div>
+                        {formAttachments.length > 0 && (
+                          <div className="mt-3 space-y-1.5">
+                            {formAttachments.map((f, i) => (
+                              <div key={i} className="flex items-center justify-between bg-white border border-slate-200 rounded-lg px-3 py-2 text-xs">
+                                <span className="font-medium text-slate-800 truncate">{f.name} ({f.size})</span>
+                                <button type="button" onClick={() => setFormAttachments(prev => prev.filter((_, idx) => idx !== i))} className="text-slate-400 hover:text-red-600 p-1">✕</button>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+
+                      <div className="pt-2 border-t border-slate-100 flex items-center justify-between">
+                        <p className="text-[11px] text-slate-400">Department: <strong className="text-slate-600">{currentUser.dept}</strong></p>
+                        <button type="submit" disabled={!title.trim() || !amount} className="bg-blue-600 hover:bg-blue-700 disabled:opacity-40 text-white font-semibold text-xs px-6 py-2.5 rounded-lg transition shadow-sm cursor-pointer">Submit Request to Manager</button>
+                      </div>
+                    </form>
+                  )}
+                </div>
+              )}
+
+                            {/* 4. Flow Categories (STRICT 8 ROLES ONLY) */}
+              {activeTab === 'flow-categories' && (
+                <div className="px-8 py-7 max-w-7xl">
+                  <div className="mb-6">
+                    <h1 className="text-2xl font-bold text-slate-900 tracking-tight">Approval Flow Categories</h1>
+                    <p className="text-xs text-slate-500 mt-1 max-w-4xl">Multi-tier routing architecture governed strictly across the <strong>8 enterprise roles</strong>. Every request follows the base flow before proceeding to final authorization.</p>
+                  </div>
+
+                  {/* BASE FLOW CARD (8 ROLES ONLY) */}
+                  <div className="bg-[#f0f6ff] border border-[#d6e6fe] rounded-2xl p-5 mb-8 shadow-2xs">
+                    <p className="text-[10px] font-bold text-blue-600 uppercase tracking-widest mb-3">BASE FLOW — 8 ROLES HIERARCHY</p>
+                    <div className="flex flex-wrap items-center gap-2">
+                      {['1. Requester', '2. Manager', '3. HR / IT / Finance', '4. Accountant (if Finance)', '5. General Manager', '6. CEO (Final Approval)'].map((stage, idx, arr) => (
+                        <React.Fragment key={stage}>
+                          <span className={`px-3.5 py-1.5 rounded-full text-xs font-semibold border ${idx === arr.length - 1 ? 'bg-green-100 text-green-800 border-green-300 font-bold' : 'bg-white text-blue-800 border-blue-200/90 shadow-2xs'}`}>{stage}</span>
+                          {idx < arr.length - 1 && <span className="text-blue-300 font-bold text-xs">→</span>}
+                        </React.Fragment>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* SECTION: ADMIN */}
+                  <div className="mb-8">
+                    <div className="flex items-center gap-2 mb-4">
+                      <div className="w-1 h-5 bg-blue-600 rounded-full" />
+                      <h2 className="text-base font-bold text-slate-900">Admin</h2>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+                      {/* HR */}
+                      <div className="bg-white rounded-2xl border border-slate-200/80 p-5 shadow-2xs">
+                        <span className="inline-block bg-blue-100 text-blue-700 text-[11px] font-bold px-2.5 py-0.5 rounded-md mb-3">HR</span>
+                        <div className="mb-4">
+                          <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">INCLUDES</p>
+                          <div className="flex flex-wrap gap-1.5">
+                            {['Recruitment', 'Salary Revision', 'Resignation', 'Holiday', 'Medical Leave', 'Long Leave', 'Maternity Leave', 'Others'].map(inc => (
+                              <span key={inc} className="bg-slate-50 text-slate-600 text-xs px-2.5 py-1 rounded-md border border-slate-200/60 font-medium">{inc}</span>
+                            ))}
+                          </div>
+                        </div>
+                        <div className="pt-3.5 border-t border-slate-100">
+                          <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">APPROVAL FLOW (8 ROLES PIPELINE)</p>
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            {['Requester', 'Manager', 'HR Head', 'General Manager', 'CEO'].map((stg, sIdx, arr) => (
+                              <React.Fragment key={stg}>
+                                <span className={`text-[11px] font-semibold px-2.5 py-1 rounded-md ${sIdx === arr.length - 1 ? 'bg-green-50 text-green-700 border border-green-200 font-bold' : 'bg-slate-100 text-slate-700'}`}>{stg}</span>
+                                {sIdx < arr.length - 1 && <span className="text-slate-300 font-bold text-[10px]">→</span>}
+                              </React.Fragment>
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* PURCHASE */}
+                      <div className="bg-white rounded-2xl border border-slate-200/80 p-5 shadow-2xs">
+                        <span className="inline-block bg-blue-100 text-blue-700 text-[11px] font-bold px-2.5 py-0.5 rounded-md mb-3">PURCHASE</span>
+                        <div className="mb-4">
+                          <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">INCLUDES</p>
+                          <div className="flex flex-wrap gap-1.5">
+                            {['Consumables', 'Non-consumables', 'Books & Journals', 'Lab Equipment', 'Others'].map(inc => (
+                              <span key={inc} className="bg-slate-50 text-slate-600 text-xs px-2.5 py-1 rounded-md border border-slate-200/60 font-medium">{inc}</span>
+                            ))}
+                          </div>
+                        </div>
+                        <div className="pt-3.5 border-t border-slate-100">
+                          <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">APPROVAL FLOW (8 ROLES PIPELINE)</p>
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            {['Requester', 'Manager', 'Finance Head', 'Accountant', 'General Manager', 'CEO'].map((stg, sIdx, arr) => (
+                              <React.Fragment key={stg}>
+                                <span className={`text-[11px] font-semibold px-2.5 py-1 rounded-md ${sIdx === arr.length - 1 ? 'bg-green-50 text-green-700 border border-green-200 font-bold' : 'bg-slate-100 text-slate-700'}`}>{stg}</span>
+                                {sIdx < arr.length - 1 && <span className="text-slate-300 font-bold text-[10px]">→</span>}
+                              </React.Fragment>
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* IT */}
+                      <div className="bg-white rounded-2xl border border-slate-200/80 p-5 shadow-2xs">
+                        <span className="inline-block bg-blue-100 text-blue-700 text-[11px] font-bold px-2.5 py-0.5 rounded-md mb-3">IT</span>
+                        <div className="mb-4">
+                          <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">INCLUDES</p>
+                          <div className="flex flex-wrap gap-1.5">
+                            {['Hardware', 'Software & Licenses', 'Network & WiFi', 'CCTV & Security', 'Cloud Services', 'Lab Systems', 'Others'].map(inc => (
+                              <span key={inc} className="bg-slate-50 text-slate-600 text-xs px-2.5 py-1 rounded-md border border-slate-200/60 font-medium">{inc}</span>
+                            ))}
+                          </div>
+                        </div>
+                        <div className="pt-3.5 border-t border-slate-100">
+                          <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">APPROVAL FLOW (8 ROLES PIPELINE)</p>
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            {['Requester', 'Manager', 'IT Head', 'General Manager', 'CEO'].map((stg, sIdx, arr) => (
+                              <React.Fragment key={stg}>
+                                <span className={`text-[11px] font-semibold px-2.5 py-1 rounded-md ${sIdx === arr.length - 1 ? 'bg-green-50 text-green-700 border border-green-200 font-bold' : 'bg-slate-100 text-slate-700'}`}>{stg}</span>
+                                {sIdx < arr.length - 1 && <span className="text-slate-300 font-bold text-[10px]">→</span>}
+                              </React.Fragment>
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* MAINTENANCE */}
+                      <div className="bg-white rounded-2xl border border-slate-200/80 p-5 shadow-2xs">
+                        <span className="inline-block bg-blue-100 text-blue-700 text-[11px] font-bold px-2.5 py-0.5 rounded-md mb-3">MAINTENANCE</span>
+                        <div className="mb-4">
+                          <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">INCLUDES</p>
+                          <div className="flex flex-wrap gap-1.5">
+                            {['Electrical', 'Plumbing', 'Civil Work', 'Carpentry', 'Painting', 'Generator & UPS', 'Air Conditioning', 'Others'].map(inc => (
+                              <span key={inc} className="bg-slate-50 text-slate-600 text-xs px-2.5 py-1 rounded-md border border-slate-200/60 font-medium">{inc}</span>
+                            ))}
+                          </div>
+                        </div>
+                        <div className="pt-3.5 border-t border-slate-100">
+                          <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">APPROVAL FLOW (8 ROLES PIPELINE)</p>
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            {['Requester', 'Manager', 'Finance Head', 'Accountant', 'General Manager', 'CEO'].map((stg, sIdx, arr) => (
+                              <React.Fragment key={stg}>
+                                <span className={`text-[11px] font-semibold px-2.5 py-1 rounded-md ${sIdx === arr.length - 1 ? 'bg-green-50 text-green-700 border border-green-200 font-bold' : 'bg-slate-100 text-slate-700'}`}>{stg}</span>
+                                {sIdx < arr.length - 1 && <span className="text-slate-300 font-bold text-[10px]">→</span>}
+                              </React.Fragment>
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* SECTION: ACADEMIC & FINANCE */}
+                  <div>
+                    <div className="flex items-center gap-2 mb-4">
+                      <div className="w-1 h-5 bg-indigo-600 rounded-full" />
+                      <h2 className="text-base font-bold text-slate-900">Academic & Finance</h2>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+                      {/* ACADEMIC */}
+                      <div className="bg-white rounded-2xl border border-slate-200/80 p-5 shadow-2xs">
+                        <span className="inline-block bg-indigo-100 text-indigo-700 text-[11px] font-bold px-2.5 py-0.5 rounded-md mb-3">ACADEMIC</span>
+                        <div className="mb-4">
+                          <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">INCLUDES</p>
+                          <div className="flex flex-wrap gap-1.5">
+                            {['Industrial Visit', 'Conference Grant', 'Workshop / Seminar', 'Faculty Dev (FDP)', 'Guest Lectures', 'Student Competitions', 'Others'].map(inc => (
+                              <span key={inc} className="bg-slate-50 text-slate-600 text-xs px-2.5 py-1 rounded-md border border-slate-200/60 font-medium">{inc}</span>
+                            ))}
+                          </div>
+                        </div>
+                        <div className="pt-3.5 border-t border-slate-100">
+                          <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">APPROVAL FLOW (8 ROLES PIPELINE)</p>
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            {['Requester', 'Manager', 'IT Head', 'General Manager', 'CEO'].map((stg, sIdx, arr) => (
+                              <React.Fragment key={stg}>
+                                <span className={`text-[11px] font-semibold px-2.5 py-1 rounded-md ${sIdx === arr.length - 1 ? 'bg-green-50 text-green-700 border border-green-200 font-bold' : 'bg-slate-100 text-slate-700'}`}>{stg}</span>
+                                {sIdx < arr.length - 1 && <span className="text-slate-300 font-bold text-[10px]">→</span>}
+                              </React.Fragment>
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* FINANCE & BUDGET */}
+                      <div className="bg-white rounded-2xl border border-slate-200/80 p-5 shadow-2xs">
+                        <span className="inline-block bg-indigo-100 text-indigo-700 text-[11px] font-bold px-2.5 py-0.5 rounded-md mb-3">FINANCE & BUDGET</span>
+                        <div className="mb-4">
+                          <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">INCLUDES</p>
+                          <div className="flex flex-wrap gap-1.5">
+                            {['Budget Allocation', 'Dept Advance', 'Vendor Payments', 'Grant Reimbursements', 'Institutional Funding', 'Audit Clearances', 'Others'].map(inc => (
+                              <span key={inc} className="bg-slate-50 text-slate-600 text-xs px-2.5 py-1 rounded-md border border-slate-200/60 font-medium">{inc}</span>
+                            ))}
+                          </div>
+                        </div>
+                        <div className="pt-3.5 border-t border-slate-100">
+                          <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">APPROVAL FLOW (8 ROLES PIPELINE)</p>
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            {['Requester', 'Manager', 'Finance Head', 'Accountant', 'General Manager', 'CEO'].map((stg, sIdx, arr) => (
+                              <React.Fragment key={stg}>
+                                <span className={`text-[11px] font-semibold px-2.5 py-1 rounded-md ${sIdx === arr.length - 1 ? 'bg-green-50 text-green-700 border border-green-200 font-bold' : 'bg-slate-100 text-slate-700'}`}>{stg}</span>
+                                {sIdx < arr.length - 1 && <span className="text-slate-300 font-bold text-[10px]">→</span>}
+                              </React.Fragment>
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* 5. Queries */}
+              {activeTab === 'queries' && (
+                <div className="px-6 py-6">
+                  <h1 className="text-2xl font-bold text-slate-900 mb-1">Queries & Clarifications</h1>
+                  <p className="text-sm text-slate-400 mb-6">Requests requiring additional documentation or response.</p>
+                  <div className="bg-white rounded-xl border border-slate-100 shadow-sm overflow-hidden">
+                    {visibleRequests.filter(r => r.status === 'QUERIED').map((req, idx) => (
+                      <button key={req.id} onClick={() => { setSelectedRequest(req); setActiveTab('all-requests'); }} className={`w-full text-left flex items-center justify-between px-5 py-4 hover:bg-slate-50 transition ${idx === 0 ? '' : 'border-t border-slate-100'}`}>
+                        <div>
+                          <p className="text-sm font-semibold text-blue-600">{req.title}</p>
+                          <p className="text-xs text-slate-500 mt-0.5">{req.query}</p>
+                        </div>
+                        <StatusBadge status={req.status} />
+                      </button>
+                    ))}
+                    {visibleRequests.filter(r => r.status === 'QUERIED').length === 0 && (
+                      <div className="py-12 text-center text-slate-400 text-sm">No queries pending.</div>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* 6. Completion Status */}
+              {activeTab === 'completion-status' && (
+                <div className="px-6 py-6">
+                  <h1 className="text-2xl font-bold text-slate-900 mb-1">Completion Status</h1>
+                  <p className="text-sm text-slate-400 mb-6">Multi-tier resolution rates and analytics.</p>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-6">
+                    <div className="bg-white rounded-xl border border-slate-100 shadow-sm p-5">
+                      <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">Completion Rate</p>
+                      <p className="text-3xl font-bold text-green-600 mb-1">{total ? Math.round(approved / total * 100) : 0}%</p>
+                      <p className="text-xs text-slate-400">{approved} of {total} requests finalized by CEO</p>
+                    </div>
+                    <div className="bg-white rounded-xl border border-slate-100 shadow-sm p-5">
+                      <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">Avg Business Turnaround</p>
+                      <p className="text-3xl font-bold text-blue-600 mb-1">2.8h</p>
+                      <p className="text-xs text-slate-400">Within 6h Mon-Fri Business SLA</p>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+                                          {/* 7. My Profile (EDITABLE WITH ROLE LOCKED) */}
+              {activeTab === 'my-profile' && (
+                <div className="px-6 py-6 max-w-xl">
+                  <div className="flex items-center justify-between mb-6">
+                    <div>
+                      <h1 className="text-2xl font-bold text-slate-900 tracking-tight">My Profile</h1>
+                      <p className="text-xs text-slate-500 mt-0.5">Verified Institutional User Profile & System Credentials</p>
+                    </div>
+                    {!isEditingProfile && (
+                      <button onClick={() => setIsEditingProfile(true)} className="flex items-center gap-1.5 bg-white border border-slate-200 hover:border-blue-500 hover:text-blue-600 text-slate-700 text-xs font-semibold px-3.5 py-1.5 rounded-lg transition shadow-2xs cursor-pointer">
+                        <Icon name="profile" className="w-3.5 h-3.5" /> Edit Profile
+                      </button>
+                    )}
+                  </div>
+
+                  {pSuccessMsg && (
+                    <div className="mb-4 bg-green-50 border border-green-200 text-green-700 text-xs font-medium px-4 py-2.5 rounded-lg flex items-center gap-2">
+                      {pSuccessMsg}
+                    </div>
+                  )}
+
+                  <div className="bg-white rounded-2xl border border-slate-200/80 shadow-2xs p-7">
+                    <div className="flex items-center gap-4 mb-6 pb-6 border-b border-slate-100">
+                      <div className="w-16 h-16 rounded-full bg-blue-50 border border-blue-200 text-blue-700 font-bold text-xl flex items-center justify-center flex-shrink-0">
+                        {currentUser.name.slice(0, 2).toUpperCase()}
+                      </div>
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <h2 className="text-xl font-bold text-slate-900">{currentUser.name}</h2>
+                          <span className="bg-green-50 text-green-700 text-[10px] font-bold px-2 py-0.5 rounded-full border border-green-200">
+                            ✓ Verified
+                          </span>
+                        </div>
+                        <p className="text-xs font-bold text-blue-600 uppercase tracking-wider mt-0.5">{currentUser.role} — {getRoleDisplayName(currentUser.role)}</p>
+                      </div>
+                    </div>
+
+                    {!isEditingProfile ? (
+                      <div className="space-y-3">
+                        {[
+                          { label: 'Full Name', value: currentUser.name, icon: '👤' },
+                          { label: 'Email Address', value: currentUser.email, icon: '✉️' },
+                          { label: 'Department', value: currentUser.dept, icon: '🏢' },
+                          { label: 'Campus', value: currentUser.campus || 'Main Campus', icon: '📍' },
+                          { label: 'Enterprise Role', value: `${currentUser.role} (${getRoleDisplayName(currentUser.role)})`, icon: '🛡️' }
+                        ].map(item => (
+                          <div key={item.label} className="flex items-center justify-between py-2.5 border-b border-slate-100 last:border-0">
+                            <span className="text-xs font-semibold text-slate-400 uppercase tracking-wide flex items-center gap-1.5">
+                              <span>{item.icon}</span> {item.label}
+                            </span>
+                            <span className="text-sm text-slate-800 font-semibold">{item.value}</span>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <form onSubmit={handleSaveProfile} className="space-y-4">
+                        <div>
+                          <label className="block text-xs font-semibold text-slate-600 uppercase mb-1">Full Name *</label>
+                          <input type="text" value={pName} onChange={e => setPName(e.target.value)} required className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-semibold text-slate-600 uppercase mb-1">Email Address <span className="text-slate-400 font-normal">(Read-only)</span></label>
+                          <input type="email" value={currentUser.email} disabled className="w-full border border-slate-100 bg-slate-50 rounded-lg px-3 py-2 text-sm text-slate-400 cursor-not-allowed" />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-semibold text-slate-600 uppercase mb-1">Enterprise Role <span className="text-slate-400 font-normal">(Locked)</span></label>
+                          <div className="w-full border border-slate-100 bg-slate-50 rounded-lg px-3 py-2 text-xs text-slate-600 font-semibold flex items-center justify-between">
+                            <span>{currentUser.role} — {getRoleDisplayName(currentUser.role)}</span>
+                            <span className="text-[10px] bg-slate-200 text-slate-600 px-2 py-0.5 rounded font-mono">🔒 Locked</span>
+                          </div>
+                        </div>
+                        <div className="grid grid-cols-2 gap-3">
+                          <div>
+                            <label className="block text-xs font-semibold text-slate-600 uppercase mb-1">Department *</label>
+                            <input type="text" value={pDept} onChange={e => setPDept(e.target.value)} required className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                          </div>
+                          <div>
+                            <label className="block text-xs font-semibold text-slate-600 uppercase mb-1">Campus</label>
+                            <input type="text" value={pCampus} onChange={e => setPCampus(e.target.value)} className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-2 pt-3 border-t border-slate-100">
+                          <button type="submit" className="bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold px-4 py-2 rounded-lg transition cursor-pointer">Save Changes</button>
+                          <button type="button" onClick={() => setIsEditingProfile(false)} className="bg-slate-100 hover:bg-slate-200 text-slate-600 text-xs font-medium px-4 py-2 rounded-lg transition cursor-pointer">Cancel</button>
+                        </div>
+                      </form>
+                    )}
+                  </div>
+                </div>
+              )}
+            </main>
+          </div>
+
+          {viewingDocument && (
+            <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-2xs z-50 flex items-center justify-center p-4">
+              <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[85vh] flex flex-col overflow-hidden border border-slate-200">
+                <div className="bg-slate-800 text-white px-5 py-3 flex items-center justify-between flex-shrink-0">
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-7 h-7 rounded bg-blue-600 flex items-center justify-center text-xs font-bold tracking-wider">DOC</div>
+                    <div>
+                      <p className="text-xs font-semibold text-slate-100">{viewingDocument.name}</p>
+                      <p className="text-[10px] text-slate-400">{viewingDocument.size} · Official Institutional Proof</p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button onClick={() => window.print()} className="bg-slate-700 hover:bg-slate-600 text-slate-200 text-xs px-3 py-1.5 rounded-md flex items-center gap-1 cursor-pointer">Print</button>
+                    <button onClick={() => setViewingDocument(null)} className="bg-slate-700 hover:bg-red-600 text-slate-200 hover:text-white p-1.5 rounded-md cursor-pointer">✕</button>
+                  </div>
+                </div>
+                <div className="flex-1 overflow-y-auto bg-slate-100 p-6 flex justify-center">
+                  <div className="bg-white border border-slate-200 shadow-md rounded-lg w-full p-8 text-slate-800 font-sans">
+                    <div className="border-b-2 border-blue-600 pb-4 mb-5 flex items-start justify-between">
+                      <div>
+                        <h3 className="text-base font-bold text-slate-900 uppercase">SMART APPROVAL SYSTEM — ATTACHMENT PROOF</h3>
+                        <p className="text-xs text-blue-600 font-semibold mt-0.5">Verified Departmental Supporting Document</p>
+                      </div>
+                      <div className="text-right text-xs">
+                        <span className="bg-green-50 text-green-700 border border-green-200 font-semibold px-2 py-0.5 rounded text-[11px]">✓ Security Scanned</span>
+                      </div>
+                    </div>
+                    <div className="space-y-4 text-xs leading-relaxed text-slate-700">
+                      <div className="bg-slate-50 border border-slate-200 rounded-lg p-3.5">
+                        <p className="font-semibold text-slate-800 mb-1">Document Details:</p>
+                        <p className="text-slate-600"><strong>File Name:</strong> {viewingDocument.name}</p>
+                        <p className="text-slate-600"><strong>File Size:</strong> {viewingDocument.size}</p>
+                        <p className="text-slate-600"><strong>Format:</strong> {viewingDocument.type} Document</p>
+                      </div>
+                      <div className="border border-slate-100 rounded-lg p-4 bg-white text-center py-10">
+                        <div className="w-12 h-12 rounded-full bg-blue-50 text-blue-600 flex items-center justify-center mx-auto mb-3">
+                          <Icon name="requests" className="w-6 h-6" />
+                        </div>
+                        <p className="font-semibold text-slate-800 text-sm">{viewingDocument.name}</p>
+                        <p className="text-slate-500 text-xs mt-1 max-w-sm mx-auto">
+                          Itemized vendor quotes, budgetary breakdown, and institutional credentials for multi-tier review.
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <div className="bg-slate-50 border-t border-slate-200 px-5 py-3 flex items-center justify-end">
+                  <button onClick={() => setViewingDocument(null)} className="bg-slate-200 hover:bg-slate-300 text-slate-700 text-xs font-semibold px-4 py-2 rounded-lg cursor-pointer">Close Preview</button>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+  </script>
+</body>
+</html>
