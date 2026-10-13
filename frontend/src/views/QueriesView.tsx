@@ -1,6 +1,7 @@
 import React from 'react';
 import { User, ApprovalRequest } from '../services/types';
 import { formatCurrencyINR } from '../services/api';
+import { canViewActiveQuery } from '../services/api';
 import { StatusBadge } from '../components/StatusBadge';
 
 interface QueriesViewProps {
@@ -14,14 +15,12 @@ export const QueriesView: React.FC<QueriesViewProps> = ({
   requests,
   onOpenRequest
 }) => {
-  const allQueries = user.role === 'REQUESTER'
-    ? requests.filter(r => r.requester === user.name && r.status === 'QUERIED')
-    : requests.filter(r => r.status === 'QUERIED');
+  const allQueries = requests.filter(request => request.status === 'QUERIED' && canViewActiveQuery(request, user));
   const [mode, setMode] = React.useState<'all' | 'mine'>('all');
   const visibleQueries = mode === 'mine' ? allQueries.filter(request => request.currentStage === user.role || request.requester === user.name) : allQueries;
 
   return (
-    <div className="px-6 py-6 max-w-4xl">
+    <div className="w-full px-6 py-6">
       <div className="mb-6">
         <h1 className="text-2xl font-bold text-slate-900 mb-1">Queries</h1>
         <p className="text-sm text-slate-400">
@@ -29,7 +28,7 @@ export const QueriesView: React.FC<QueriesViewProps> = ({
         </p>
       </div>
 
-      {user.role === 'CEO' && <div className="flex gap-2 mb-4"><button onClick={() => setMode('all')} className={`px-3 py-2 rounded-lg text-xs font-semibold ${mode === 'all' ? 'bg-blue-600 text-white' : 'bg-white text-slate-600 border border-slate-200'}`}>All Queries</button><button onClick={() => setMode('mine')} className={`px-3 py-2 rounded-lg text-xs font-semibold ${mode === 'mine' ? 'bg-blue-600 text-white' : 'bg-white text-slate-600 border border-slate-200'}`}>My Queries</button></div>}
+      {(user.role === 'CEO' || user.role === 'CHAIRMAN') && <div className="flex gap-2 mb-4"><button onClick={() => setMode('all')} className={`px-3 py-2 rounded-lg text-xs font-semibold ${mode === 'all' ? 'bg-blue-600 text-white' : 'bg-white text-slate-600 border border-slate-200'}`}>All Queries</button><button onClick={() => setMode('mine')} className={`px-3 py-2 rounded-lg text-xs font-semibold ${mode === 'mine' ? 'bg-blue-600 text-white' : 'bg-white text-slate-600 border border-slate-200'}`}>My Queries</button></div>}
 
       <div className="bg-white rounded-xl border border-slate-100 shadow-sm overflow-hidden">
         {visibleQueries.map((req, idx) => (

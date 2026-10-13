@@ -7,6 +7,7 @@ export const statusConfig: Record<RequestStatus, { bg: string; text: string; dot
   REJECTED: { bg: 'bg-red-50', text: 'text-red-700', dot: 'bg-red-500' },
   QUERIED: { bg: 'bg-orange-50', text: 'text-orange-700', dot: 'bg-orange-400' },
   ESCALATED: { bg: 'bg-purple-50', text: 'text-purple-700', dot: 'bg-purple-500' },
+  COMPLETED: { bg: 'bg-emerald-50', text: 'text-emerald-700', dot: 'bg-emerald-500' },
 };
 
 export const StatusBadge: React.FC<{ status: RequestStatus }> = ({ status }) => {

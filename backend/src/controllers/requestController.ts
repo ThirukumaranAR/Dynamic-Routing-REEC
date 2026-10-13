@@ -1,282 +1,728 @@
+import { randomUUID } from 'node:crypto';
 import { Response } from 'express';
-import { db } from '../services/db';
 import { AuthenticatedRequest } from '../middleware/authMiddleware';
-import { ApprovalRequest, RequestCategory } from '../models/types';
+import { ApprovalRequest, RequestCategory, User, WorkflowBranch } from '../models/types';
+import { prisma, withTransaction, writeAuditEvent } from '../services/db';
+import {
+  approveWorkflowStep,
+  getDefaultGeneralWorkflow,
+  initializeRequestWorkflow,
+  rejectWorkflowStep,
+  routeRequestToBranch
+} from '../services/workflowService';
 
-const formatTimestamp = () => {
-  return new Date().toLocaleString('en-IN', {
-    day: '2-digit',
-    month: '2-digit',
-    year: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit'
+const timestamp = () => new Date().toISOString();
+const formatDate = () => new Date().toLocaleDateString('en-IN', { day: '2-digit', month: '2-digit', year: 'numeric' });
+
+const calculateBusinessIdle = (updatedAt: string, storedHours: number) => {
+  const start = new Date(updatedAt);
+  const end = new Date();
+  if (!Number.isFinite(start.getTime()) || start >= end) return storedHours || 0;
+  let minutes = 0;
+  const cursor = new Date(start);
+  cursor.setHours(0, 0, 0, 0);
+  for (let day = 0; cursor <= end && day < 3660; day++, cursor.setDate(cursor.getDate() + 1)) {
+    if (cursor.getDay() === 0 || cursor.getDay() === 6) continue;
+    const open = new Date(cursor);
+    open.setHours(9, 0, 0, 0);
+    const close = new Date(cursor);
+    close.setHours(17, 0, 0, 0);
+    minutes += Math.max(0, Math.min(end.getTime(), close.getTime()) - Math.max(start.getTime(), open.getTime())) / 60000;
+  }
+  return Math.round((storedHours + minutes / 60) * 10) / 10;
+};
+
+const isOwner = (request: ApprovalRequest, user: User) => request.requesterId
+  ? request.requesterId === user.id
+  : request.requesterEmail?.toLowerCase() === user.email.toLowerCase() || request.requester === user.name;
+
+const isAdmin = (user: User) => user.role === 'CEO' || user.role === 'CHAIRMAN';
+
+const canViewRequest = (request: ApprovalRequest, user: User) => {
+  if (isAdmin(user) || isOwner(request, user)) return true;
+  if (user.role === 'REQUESTER') return false;
+  if (request.status === 'QUERIED') {
+    const latestQuery = [...(request.queryThread || [])].reverse().find(message => message.kind === 'QUERY');
+    return latestQuery?.authorId === user.id || request.queryRaisedByUserId === user.id;
+  }
+  return request.assignedUserId === user.id || request.currentStage === user.role ||
+    request.approvalHistory?.some(event => event.actorId === user.id) === true ||
+    request.stages?.some(s => s.role === user.role && s.isApplicable !== false) === true;
+};
+
+const requestForViewer = (request: ApprovalRequest, user: User) => {
+  const idleHours = request.status === 'PENDING' ? calculateBusinessIdle(request.updatedAt, request.hoursIdle) : request.hoursIdle;
+  const safe = { ...request, hoursIdle: idleHours, businessHoursIdle: idleHours } as ApprovalRequest & { businessHoursIdle: number };
+  if (isAdmin(user) || isOwner(request, user)) return safe;
+  const latestQuery = [...(request.queryThread || [])].reverse().find(message => message.kind === 'QUERY');
+  if (latestQuery?.authorId === user.id || request.queryRaisedByUserId === user.id) return safe;
+  return {
+    ...safe,
+    query: undefined,
+    queryRaisedByUserId: undefined,
+    queryRaisedByName: undefined,
+    queryThread: [],
+    auditTrail: safe.auditTrail.filter(entry => !/query|clarification response/i.test(entry.action))
+  };
+};
+
+const appendAudit = (request: ApprovalRequest, user: User, action: string, ts: string) => ({
+  ...request,
+  auditTrail: [...(request.auditTrail || []), { ts, actor: `${user.name} (${user.role})`, action }],
+  updatedAt: ts
+});
+
+export const mapPrismaRequest = (r: any): ApprovalRequest => {
+  let auditTrail: any[] = [];
+  if (r.auditTrailJson) {
+    try { auditTrail = JSON.parse(r.auditTrailJson); } catch {}
+  }
+
+  let stages: any[] = [];
+  if (r.stagesJson) {
+    try { stages = JSON.parse(r.stagesJson); } catch {}
+  } else if (Array.isArray(r.stages)) {
+    stages = r.stages.map((s: any) => ({
+      id: s.id,
+      stageIndex: s.stageIndex,
+      stageKey: s.stageKey,
+      role: s.role,
+      label: s.label,
+      status: s.status,
+      isApplicable: s.isApplicable !== false,
+      decidedByUserId: s.decidedByUserId || undefined,
+      decidedByName: s.decidedByName || undefined,
+      decidedByRole: s.decidedByRole || undefined,
+      decisionAction: s.decisionAction || undefined,
+      decisionTs: s.decisionTs || undefined,
+      notes: s.notes || undefined
+    }));
+  }
+
+  return {
+    id: r.id,
+    title: r.title,
+    department: r.department,
+    amount: Number(r.amount),
+    date: r.date,
+    status: r.status as any,
+    category: r.category as any,
+    requestType: (r.requestType || r.category) as any,
+    requester: r.requester,
+    requesterId: r.requesterId || undefined,
+    requesterEmail: r.requesterEmail || undefined,
+    description: r.description,
+    purpose: r.purpose || r.description,
+    requestDetails: r.requestDetailsJson ? JSON.parse(r.requestDetailsJson) : undefined,
+    company: r.company || 'FlowNexus',
+    businessUnit: r.businessUnit || 'Main',
+    campus: r.campus || undefined,
+    institution: r.institution || undefined,
+    hoursIdle: r.hoursIdle || 0,
+    currentStage: r.currentStage,
+    currentStepIndex: r.currentStepIndex || 0,
+    assignedRole: r.assignedRole || undefined,
+    assignedUserId: r.assignedUserId || undefined,
+    selectedBranch: r.selectedBranch || undefined,
+    workflowVersionNumber: r.workflowVersionNumber || 1,
+    workflowVersionId: r.workflowVersionId || undefined,
+    workflowSnapshot: r.workflowSnapshotJson ? JSON.parse(r.workflowSnapshotJson) : undefined,
+    query: r.query || undefined,
+    queryRaisedByUserId: r.queryRaisedByUserId || undefined,
+    queryRaisedByName: r.queryRaisedByName || undefined,
+    flagged: Boolean(r.flagged),
+    flaggedAt: r.flaggedAt || undefined,
+    auditTrail,
+    stages,
+    attachments: (r.attachments || []).map((att: any) => ({
+      id: att.id,
+      name: att.name,
+      size: att.size,
+      type: att.type,
+      dataUrl: att.dataUrl || undefined
+    })),
+    queryThread: (r.queryThread || []).map((qm: any) => ({
+      id: qm.id,
+      authorId: qm.authorId,
+      authorName: qm.authorName,
+      authorRole: qm.authorRole,
+      kind: qm.kind as any,
+      text: qm.text,
+      ts: qm.ts
+    })),
+    approvalHistory: (r.approvalHistory || []).map((ah: any) => ({
+      stepIndex: ah.stepIndex,
+      role: ah.role,
+      actorId: ah.actorId || undefined,
+      actorName: ah.actorName,
+      action: ah.action as any,
+      ts: ah.ts
+    })),
+    migrationEvents: (r.migrationEvents || []).map((me: any) => ({
+      id: me.id,
+      requestId: me.requestId,
+      actorId: me.actorId,
+      actorName: me.actorName,
+      actorRole: me.actorRole,
+      reason: me.reason,
+      previousWorkflowVersion: me.previousWorkflowVersion,
+      newWorkflowVersion: me.newWorkflowVersion,
+      oldStage: me.oldStage || null,
+      newStage: me.newStage || null,
+      ts: me.ts
+    })),
+    createdAt: r.createdAt,
+    updatedAt: r.updatedAt
+  };
+};
+
+const mutateRequest = async (
+  requestId: string,
+  user: User,
+  action: string,
+  mutate: (request: ApprovalRequest, ts: string) => ApprovalRequest
+): Promise<ApprovalRequest | null> => {
+  return withTransaction(async tx => {
+    const raw = await tx.approvalRequest.findUnique({
+      where: { id: requestId },
+      include: {
+        stages: { orderBy: { stageIndex: 'asc' } },
+        attachments: true,
+        queryThread: { orderBy: { ts: 'asc' } },
+        approvalHistory: { orderBy: { stepIndex: 'asc' } },
+        migrationEvents: { orderBy: { ts: 'asc' } }
+      }
+    });
+    if (!raw) return null;
+
+    const current = mapPrismaRequest(raw);
+    const idleRequest = current.status === 'PENDING'
+      ? { ...current, hoursIdle: calculateBusinessIdle(current.updatedAt, current.hoursIdle) }
+      : current;
+
+    const ts = timestamp();
+    const updated = mutate(idleRequest, ts);
+
+    // Synchronize stages table
+    if (updated.stages && updated.stages.length) {
+      await tx.requestStageInstance.deleteMany({ where: { requestId } });
+      for (const stg of updated.stages) {
+        await tx.requestStageInstance.create({
+          data: {
+            id: randomUUID(),
+            requestId,
+            stageIndex: stg.stageIndex ?? 0,
+            stageKey: stg.stageKey || `STAGE_${stg.role}`,
+            role: stg.role,
+            label: stg.label || stg.role,
+            status: stg.status,
+            isApplicable: stg.isApplicable !== false,
+            decidedByUserId: stg.decidedByUserId || null,
+            decidedByName: stg.decidedByName || null,
+            decidedByRole: stg.decidedByRole || null,
+            decisionAction: stg.decisionAction || null,
+            decisionTs: stg.decisionTs || null,
+            notes: stg.notes || null
+          }
+        });
+      }
+    }
+
+    // Synchronize approval decisions
+    if (updated.approvalHistory && updated.approvalHistory.length) {
+      await tx.approvalDecision.deleteMany({ where: { requestId } });
+      for (const dec of updated.approvalHistory) {
+        await tx.approvalDecision.create({
+          data: {
+            id: randomUUID(),
+            requestId,
+            stepIndex: dec.stepIndex,
+            role: dec.role,
+            actorId: dec.actorId || null,
+            actorName: dec.actorName,
+            actorRole: dec.role,
+            action: dec.action,
+            ts: dec.ts
+          }
+        });
+      }
+    }
+
+    // Synchronize query thread
+    if (updated.queryThread && updated.queryThread.length) {
+      await tx.queryMessage.deleteMany({ where: { requestId } });
+      for (const q of updated.queryThread) {
+        await tx.queryMessage.create({
+          data: {
+            id: q.id || randomUUID(),
+            requestId,
+            authorId: q.authorId,
+            authorName: q.authorName,
+            authorRole: q.authorRole,
+            kind: q.kind,
+            text: q.text,
+            ts: q.ts
+          }
+        });
+      }
+    }
+
+    await tx.approvalRequest.update({
+      where: { id: requestId },
+      data: {
+        title: updated.title,
+        amount: updated.amount,
+        status: updated.status,
+        currentStage: updated.currentStage,
+        currentStepIndex: updated.currentStepIndex ?? 0,
+        assignedRole: updated.assignedRole || null,
+        assignedUserId: updated.assignedUserId || null,
+        selectedBranch: updated.selectedBranch || null,
+        workflowVersionNumber: updated.workflowVersionNumber ?? 1,
+        query: updated.query || null,
+        queryRaisedByUserId: updated.queryRaisedByUserId || null,
+        queryRaisedByName: updated.queryRaisedByName || null,
+        flagged: Boolean(updated.flagged),
+        flaggedAt: updated.flaggedAt || null,
+        hoursIdle: updated.hoursIdle || 0,
+        auditTrailJson: JSON.stringify(updated.auditTrail || []),
+        stagesJson: JSON.stringify(updated.stages || []),
+        workflowSnapshotJson: updated.workflowSnapshot ? JSON.stringify(updated.workflowSnapshot) : null,
+        updatedAt: ts
+      }
+    });
+
+    await writeAuditEvent({
+      actorId: user.id,
+      actorName: user.name,
+      actorRole: user.role,
+      action,
+      targetType: 'Request',
+      targetId: requestId
+    }, tx);
+
+    return updated;
   });
 };
 
-const formatDate = () => {
-  return new Date().toLocaleDateString('en-IN', {
-    day: '2-digit',
-    month: '2-digit',
-    year: 'numeric'
-  });
+const errorResponse = (res: Response, error: any) => {
+  if (error?.name === 'VersionError' || error?.code === 112 || error?.code === 251 || error?.code === 'P2034') {
+    return res.status(409).json({ success: false, message: 'The request changed concurrently. Refresh and try again.' });
+  }
+  const message = error instanceof Error ? error.message : 'The request could not be updated';
+  const unauthorized = /not assigned|only (the|current) (current |assigned |requester|owner)?|only higher authority/i.test(message);
+  return res.status(unauthorized ? 403 : 400).json({ success: false, message });
 };
 
-// GET /api/requests
-export const getAllRequests = (req: AuthenticatedRequest, res: Response) => {
+const validCategories: RequestCategory[] = ['Leave', 'Permission', 'Purchase', 'Travel', 'Equipment', 'Reimbursement', 'Work From Home', 'Other'];
+
+export const getAllRequests = async (req: AuthenticatedRequest, res: Response) => {
   const user = req.user!;
-  let requests = [...db.requests];
+  const rawRequests = await prisma.approvalRequest.findMany({
+    orderBy: { createdAt: 'desc' },
+    include: {
+      stages: { orderBy: { stageIndex: 'asc' } },
+      attachments: true,
+      queryThread: true,
+      approvalHistory: true,
+      migrationEvents: true
+    }
+  });
 
-  // Role-based visibility
-  if (user.role === 'REQUESTER') {
-    requests = requests.filter(r => r.requester === user.name);
-  } else if (user.role === 'AUTHORITY') {
-    // Authority primarily sees escalated requests or all
-    const filterAll = req.query.all === 'true';
-    if (!filterAll) {
-      requests = requests.filter(r => r.status === 'ESCALATED');
+  let requests = rawRequests.map(mapPrismaRequest).filter(request => canViewRequest(request, user));
+  if (req.query.status && req.query.status !== 'ALL') requests = requests.filter(request => request.status === req.query.status);
+  if (req.query.category && req.query.category !== 'ALL') requests = requests.filter(request => request.category === req.query.category);
+  return res.json({ success: true, count: requests.length, requests: requests.map(request => requestForViewer(request, user)) });
+};
+
+export const getRequestById = async (req: AuthenticatedRequest, res: Response) => {
+  const raw = await prisma.approvalRequest.findUnique({
+    where: { id: req.params.id },
+    include: {
+      stages: { orderBy: { stageIndex: 'asc' } },
+      attachments: true,
+      queryThread: true,
+      approvalHistory: true,
+      migrationEvents: true
+    }
+  });
+  if (!raw) {
+    console.error('[DEBUG getRequestById] NOT FOUND in db. id:', req.params.id, 'user:', req.user?.role, req.user?.email);
+    return res.status(404).json({ success: false, message: 'Request not found' });
+  }
+  const request = mapPrismaRequest(raw);
+  if (!canViewRequest(request, req.user!)) {
+    console.error('[DEBUG getRequestById] canViewRequest returned FALSE. id:', req.params.id, 'user:', req.user?.role);
+    return res.status(404).json({ success: false, message: 'Request not found' });
+  }
+  return res.json({ success: true, request: requestForViewer(request, req.user!) });
+};
+
+export const createRequest = async (req: AuthenticatedRequest, res: Response) => {
+  const user = req.user!;
+  if (!user || user.isActive === false) return res.status(403).json({ success: false, message: 'Active account required to submit requests' });
+
+  // Explicit role-based request creation permission check:
+  // Allowed: REQUESTER, INSTITUTION_MANAGER, MANAGER, FINANCE, ACCOUNTANT, VP, HOI, DEAN
+  // Strictly Forbidden: IT, AUDIT, HR, MMI, CEO, CHAIRMAN
+  const forbiddenRoles = ['IT', 'AUDIT', 'HR', 'MMI', 'CEO', 'CHAIRMAN'];
+  if (forbiddenRoles.includes(user.role)) {
+    return res.status(403).json({ success: false, message: `Request creation is strictly rejected for ${user.role}` });
+  }
+
+  const allowedRoles = ['REQUESTER', 'INSTITUTION_MANAGER', 'MANAGER', 'FINANCE', 'ACCOUNTANT', 'VP', 'HOI', 'DEAN'];
+  if (!allowedRoles.includes(user.role)) {
+    return res.status(403).json({ success: false, message: `Role ${user.role} is not permitted to create requests` });
+  }
+
+  const { title, category, requestType, amount, description, purpose, requestDetails, attachments } = req.body;
+  const numericAmount = Number(amount);
+  if (typeof title !== 'string' || !title.trim() || !Number.isFinite(numericAmount) || numericAmount < 0 || !validCategories.includes(category)) {
+    return res.status(400).json({ success: false, message: 'A title, valid request category, and non-negative amount are required' });
+  }
+  const safeDescription = (typeof description === 'string' && description.trim()) || (typeof purpose === 'string' && purpose.trim()) || '';
+  if (!safeDescription) return res.status(400).json({ success: false, message: 'Purpose and description are required' });
+  const safeAttachments = Array.isArray(attachments) ? attachments : [];
+  if (safeAttachments.some(file => !file || typeof file.name !== 'string' || typeof file.type !== 'string')) {
+    return res.status(400).json({ success: false, message: 'Attachments must include valid file metadata' });
+  }
+
+  const activeWorkflows = await prisma.workflowDefinition.findMany({ where: { active: true } });
+  if (!activeWorkflows.length) return res.status(409).json({ success: false, message: 'No active approval workflow is available' });
+
+  const generalDef = await prisma.workflowDefinition.findUnique({
+    where: { id: 'workflow-general' },
+    include: { versions: { orderBy: { version: 'desc' }, take: 1 } }
+  });
+
+  let generalWorkflow = getDefaultGeneralWorkflow();
+  if (generalDef?.versions[0]?.stagesJson) {
+    try {
+      const parsed = JSON.parse(generalDef.versions[0].stagesJson);
+      generalWorkflow = {
+        id: generalDef.id,
+        name: generalDef.name,
+        version: generalDef.currentVersion,
+        stages: parsed.stages || [],
+        branchConfigs: parsed.branchConfigs || [],
+        history: parsed.history || [],
+        active: true,
+        activatedAt: generalDef.versions[0].publishedAt,
+        activatedBy: generalDef.versions[0].publishedBy
+      };
+    } catch {
+      // fallback to default
     }
   }
 
-  // Filter by status query param if provided
-  const { status, category } = req.query;
-  if (status && status !== 'ALL') {
-    requests = requests.filter(r => r.status === status);
-  }
-  if (category && category !== 'ALL') {
-    requests = requests.filter(r => r.category === category);
-  }
-
-  res.json({
-    success: true,
-    count: requests.length,
-    requests
-  });
-};
-
-// GET /api/requests/:id
-export const getRequestById = (req: AuthenticatedRequest, res: Response) => {
-  const { id } = req.params;
-  const request = db.requests.find(r => r.id === id);
-
-  if (!request) {
-    return res.status(404).json({ success: false, message: 'Request not found' });
-  }
-
-  res.json({ success: true, request });
-};
-
-// POST /api/requests (Create request)
-export const createRequest = (req: AuthenticatedRequest, res: Response) => {
-  const user = req.user!;
-  const { title, category, requestType, amount, description, purpose, requestDetails } = req.body;
-
-  if (!title || !amount) {
-    return res.status(400).json({ success: false, message: 'Title and amount are required' });
-  }
-
-  const nextNum = db.requests.length + 1;
-  const newId = `REQ-00${nextNum}`;
-  const nowTs = formatTimestamp();
-
-  const newRequest: ApprovalRequest = {
-    id: newId,
+  const ts = timestamp();
+  const reqId = `REQ-${randomUUID().slice(0, 8).toUpperCase()}`;
+  const request = initializeRequestWorkflow({
+    id: reqId,
     title: title.trim(),
     department: user.dept,
-    amount: parseInt(amount, 10),
+    amount: numericAmount,
     date: formatDate(),
     status: 'PENDING',
-    category: (category as RequestCategory) || 'Other',
-    requestType: (requestType as RequestCategory) || (category as RequestCategory) || 'Other',
+    currentStage: 'MANAGER',
+    category,
+    requestType: requestType || category,
     requester: user.name,
-    description: description ? description.trim() : '',
+    requesterId: user.id,
+    requesterEmail: user.email,
+    description: safeDescription,
+    purpose: safeDescription,
+    requestDetails,
     hoursIdle: 0,
     company: user.company,
     businessUnit: user.businessUnit,
-    purpose: purpose ? purpose.trim() : description ? description.trim() : '',
-    requestDetails,
+    attachments: safeAttachments.map((file: any) => ({
+      id: randomUUID(),
+      name: file.name,
+      size: file.size || '',
+      type: file.type,
+      dataUrl: file.dataUrl
+    })),
     auditTrail: [
-      { ts: nowTs, actor: user.name, action: 'Request submitted' },
-      { ts: nowTs, actor: 'System', action: 'Assigned to approver' }
+      { ts, actor: user.name, action: `Request submitted with ${safeAttachments.length} attachment(s)` },
+      { ts, actor: 'System', action: 'Assigned for approval workflow' }
     ],
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString()
-  };
+    createdAt: ts,
+    updatedAt: ts
+  }, activeWorkflows as any, generalWorkflow);
 
-  db.requests.unshift(newRequest);
+  await withTransaction(async tx => {
+    await tx.approvalRequest.create({
+      data: {
+        id: request.id,
+        title: request.title,
+        department: request.department,
+        amount: request.amount,
+        date: request.date,
+        status: request.status,
+        category: request.category,
+        requestType: request.requestType || request.category,
+        requester: request.requester,
+        requesterId: request.requesterId || null,
+        requesterEmail: request.requesterEmail || null,
+        description: request.description,
+        purpose: request.purpose || null,
+        requestDetailsJson: request.requestDetails ? JSON.stringify(request.requestDetails) : null,
+        company: request.company || 'FlowNexus',
+        businessUnit: request.businessUnit || 'Main',
+        campus: request.campus || null,
+        institution: request.institution || null,
+        hoursIdle: 0,
+        currentStage: request.currentStage,
+        currentStepIndex: request.currentStepIndex || 0,
+        assignedRole: request.assignedRole || request.currentStage,
+        assignedUserId: request.assignedUserId || null,
+        selectedBranch: request.selectedBranch || null,
+        workflowVersionNumber: request.workflowVersionNumber || 1,
+        workflowSnapshotJson: request.workflowSnapshot ? JSON.stringify(request.workflowSnapshot) : null,
+        query: null,
+        flagged: false,
+        auditTrailJson: JSON.stringify(request.auditTrail || []),
+        stagesJson: JSON.stringify(request.stages || []),
+        createdAt: ts,
+        updatedAt: ts
+      }
+    });
 
-  res.status(201).json({
+    if (request.stages && request.stages.length) {
+      for (const stg of request.stages) {
+        await tx.requestStageInstance.create({
+          data: {
+            id: randomUUID(),
+            requestId: request.id,
+            stageIndex: stg.stageIndex ?? 0,
+            stageKey: stg.stageKey || `STAGE_${stg.role}`,
+            role: stg.role,
+            label: stg.label || stg.role,
+            status: stg.status,
+            isApplicable: stg.isApplicable !== false,
+            decidedByUserId: stg.decidedByUserId || null,
+            decidedByName: stg.decidedByName || null,
+            decidedByRole: stg.decidedByRole || null,
+            decisionAction: stg.decisionAction || null,
+            decisionTs: stg.decisionTs || null,
+            notes: stg.notes || null
+          }
+        });
+      }
+    }
+
+    if (request.attachments && request.attachments.length) {
+      for (const att of request.attachments) {
+        await tx.requestAttachment.create({
+          data: {
+            id: randomUUID(),
+            requestId: request.id,
+            name: att.name,
+            size: att.size || '',
+            type: att.type,
+            dataUrl: att.dataUrl || null
+          }
+        });
+      }
+    }
+
+    await writeAuditEvent({
+      actorId: user.id,
+      actorName: user.name,
+      actorRole: user.role,
+      action: 'Request created',
+      targetType: 'Request',
+      targetId: request.id
+    }, tx);
+  });
+
+  return res.status(201).json({
     success: true,
-    message: 'Request submitted successfully!',
-    request: newRequest
+    message: 'Request submitted successfully',
+    request: requestForViewer(request, user)
   });
 };
 
-// POST /api/requests/:id/approve
-export const approveRequest = (req: AuthenticatedRequest, res: Response) => {
-  const user = req.user!;
-  const { id } = req.params;
-  const request = db.requests.find(r => r.id === id);
-
-  if (!request) {
-    return res.status(404).json({ success: false, message: 'Request not found' });
+export const routeRequest = async (req: AuthenticatedRequest, res: Response) => {
+  const branch = String(req.body.branch || '').toUpperCase() as WorkflowBranch;
+  const validBranches = ['IT', 'AUDIT', 'HR', 'MMI', 'FINANCE'];
+  if (!validBranches.includes(branch)) {
+    return res.status(400).json({ success: false, message: 'Choose IT, Audit, HR, or MMI branch' });
   }
-
-  const actionDesc = user.role === 'AUTHORITY'
-    ? 'Approved by higher authority'
-    : 'Request approved by approver';
-
-  request.status = 'APPROVED';
-  request.hoursIdle = 0;
-  request.updatedAt = new Date().toISOString();
-  request.auditTrail.push({
-    ts: formatTimestamp(),
-    actor: user.name,
-    action: actionDesc
-  });
-
-  res.json({ success: true, message: 'Request approved', request });
+  try {
+    const request = await mutateRequest(
+      req.params.id,
+      req.user!,
+      'Request routed',
+      (current, ts) => routeRequestToBranch(current, req.user!, branch, ts)
+    );
+    if (!request) return res.status(404).json({ success: false, message: 'Request not found' });
+    return res.json({ success: true, request: requestForViewer(request, req.user!) });
+  } catch (error) {
+    return errorResponse(res, error);
+  }
 };
 
-// POST /api/requests/:id/reject
-export const rejectRequest = (req: AuthenticatedRequest, res: Response) => {
-  const user = req.user!;
-  const { id } = req.params;
-  const { reason } = req.body;
-  const request = db.requests.find(r => r.id === id);
-
-  if (!request) {
-    return res.status(404).json({ success: false, message: 'Request not found' });
+export const approveRequest = async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const request = await mutateRequest(req.params.id, req.user!, 'Request approval', (current, ts) => {
+      if (req.body.override === 'direct') {
+        if (!isAdmin(req.user!) && req.user!.role !== 'GENERAL_MANAGER') throw new Error('Only higher authority may directly clear a request.');
+        if (current.status !== 'PENDING' || current.hoursIdle < 6) throw new Error('Direct clearance is only allowed after the six-hour SLA threshold.');
+        return {
+          ...appendAudit(
+            { ...current, status: 'APPROVED', currentStage: 'COMPLETED', assignedUserId: undefined, assignedRole: undefined, hoursIdle: 0 },
+            req.user!,
+            'Direct executive clearance granted',
+            ts
+          ),
+          approvalHistory: [
+            ...(current.approvalHistory || []),
+            { stepIndex: current.currentStepIndex ?? -1, role: req.user!.role, actorId: req.user!.id, actorName: req.user!.name, action: 'OVERRIDDEN', ts }
+          ]
+        };
+      }
+      return approveWorkflowStep(current, req.user!, ts, req.body.override === 'advance', req.body.branch);
+    });
+    if (!request) return res.status(404).json({ success: false, message: 'Request not found' });
+    return res.json({ success: true, request: requestForViewer(request, req.user!) });
+  } catch (error) {
+    return errorResponse(res, error);
   }
-
-  const actionDesc = user.role === 'AUTHORITY'
-    ? 'Rejected by higher authority'
-    : `Request rejected by approver${reason ? ` — ${reason}` : ''}`;
-
-  request.status = 'REJECTED';
-  request.hoursIdle = 0;
-  request.updatedAt = new Date().toISOString();
-  request.auditTrail.push({
-    ts: formatTimestamp(),
-    actor: user.name,
-    action: actionDesc
-  });
-
-  res.json({ success: true, message: 'Request rejected', request });
 };
 
-// POST /api/requests/:id/query (Approver raises query)
-export const raiseQuery = (req: AuthenticatedRequest, res: Response) => {
-  const user = req.user!;
-  const { id } = req.params;
-  const { query } = req.body;
-
-  if (!query || !query.trim()) {
-    return res.status(400).json({ success: false, message: 'Query text is required' });
+export const rejectRequest = async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const request = await mutateRequest(
+      req.params.id,
+      req.user!,
+      'Request rejected',
+      (current, ts) => rejectWorkflowStep(current, req.user!, ts, req.body.reason)
+    );
+    if (!request) return res.status(404).json({ success: false, message: 'Request not found' });
+    return res.json({ success: true, request: requestForViewer(request, req.user!) });
+  } catch (error) {
+    return errorResponse(res, error);
   }
-
-  const request = db.requests.find(r => r.id === id);
-
-  if (!request) {
-    return res.status(404).json({ success: false, message: 'Request not found' });
-  }
-
-  request.status = 'QUERIED';
-  request.query = query.trim();
-  request.hoursIdle = 0;
-  request.updatedAt = new Date().toISOString();
-  request.auditTrail.push({
-    ts: formatTimestamp(),
-    actor: user.name,
-    action: `Query raised: "${query.trim()}"`
-  });
-
-  res.json({ success: true, message: 'Query sent to requester', request });
 };
 
-// POST /api/requests/:id/respond (Requester responds to query)
-export const respondToQuery = (req: AuthenticatedRequest, res: Response) => {
-  const user = req.user!;
-  const { id } = req.params;
-  const { response } = req.body;
-
-  if (!response || !response.trim()) {
-    return res.status(400).json({ success: false, message: 'Response text is required' });
+export const raiseQuery = async (req: AuthenticatedRequest, res: Response) => {
+  const text = typeof req.body.query === 'string' ? req.body.query.trim() : '';
+  if (!text) return res.status(400).json({ success: false, message: 'Query text is required' });
+  try {
+    const request = await mutateRequest(req.params.id, req.user!, 'Clarification query raised', (current, ts) => {
+      if (current.status !== 'PENDING' || current.currentStage !== req.user!.role || (current.assignedUserId && current.assignedUserId !== req.user!.id)) {
+        throw new Error('Only the current assigned approver can raise a query');
+      }
+      const message = { id: randomUUID(), authorId: req.user!.id, authorName: req.user!.name, authorRole: req.user!.role, kind: 'QUERY' as const, text, ts };
+      return appendAudit(
+        { ...current, status: 'QUERIED', query: text, queryRaisedByUserId: req.user!.id, queryRaisedByName: req.user!.name, queryThread: [...(current.queryThread || []), message], hoursIdle: 0 },
+        req.user!,
+        `Query raised: "${text}"`,
+        ts
+      );
+    });
+    if (!request) return res.status(404).json({ success: false, message: 'Request not found' });
+    return res.json({ success: true, request: requestForViewer(request, req.user!) });
+  } catch (error) {
+    return errorResponse(res, error);
   }
-
-  const request = db.requests.find(r => r.id === id);
-
-  if (!request) {
-    return res.status(404).json({ success: false, message: 'Request not found' });
-  }
-
-  request.status = 'PENDING';
-  delete request.query;
-  request.hoursIdle = 0;
-  request.updatedAt = new Date().toISOString();
-  request.auditTrail.push({
-    ts: formatTimestamp(),
-    actor: user.name,
-    action: `Requester responded: "${response.trim()}"`
-  });
-
-  res.json({ success: true, message: 'Response submitted', request });
 };
 
-// POST /api/requests/:id/escalate
-export const escalateRequest = (req: AuthenticatedRequest, res: Response) => {
-  const user = req.user!;
-  const { id } = req.params;
-  const request = db.requests.find(r => r.id === id);
-
-  if (!request) {
-    return res.status(404).json({ success: false, message: 'Request not found' });
+export const respondToQuery = async (req: AuthenticatedRequest, res: Response) => {
+  const text = typeof req.body.response === 'string' ? req.body.response.trim() : '';
+  if (!text) return res.status(400).json({ success: false, message: 'Response text is required' });
+  try {
+    const request = await mutateRequest(req.params.id, req.user!, 'Requester responded to query', (current, ts) => {
+      if (req.user!.role !== 'REQUESTER' || !isOwner(current, req.user!) || current.status !== 'QUERIED') {
+        throw new Error('Only the owner of an active query can respond');
+      }
+      const message = { id: randomUUID(), authorId: req.user!.id, authorName: req.user!.name, authorRole: req.user!.role, kind: 'RESPONSE' as const, text, ts };
+      const revisedAmount = req.body.amount === undefined ? current.amount : Number(req.body.amount);
+      if (!Number.isFinite(revisedAmount) || revisedAmount < 0) throw new Error('Revised amount must be non-negative');
+      const resumed = {
+        ...current,
+        title: typeof req.body.title === 'string' && req.body.title.trim() ? req.body.title.trim() : current.title,
+        amount: revisedAmount,
+        description: typeof req.body.description === 'string' && req.body.description.trim() ? req.body.description.trim() : current.description,
+        status: 'PENDING' as const,
+        query: undefined,
+        queryRaisedByUserId: undefined,
+        queryRaisedByName: undefined,
+        queryThread: [...(current.queryThread || []), message],
+        hoursIdle: 0
+      };
+      return appendAudit(resumed, req.user!, `Requester responded: "${text}"`, ts);
+    });
+    if (!request) return res.status(404).json({ success: false, message: 'Request not found' });
+    return res.json({ success: true, request: requestForViewer(request, req.user!) });
+  } catch (error) {
+    return errorResponse(res, error);
   }
-
-  request.status = 'ESCALATED';
-  request.hoursIdle = 0;
-  request.updatedAt = new Date().toISOString();
-  request.auditTrail.push({
-    ts: formatTimestamp(),
-    actor: user.name,
-    action: 'Escalated to higher authority'
-  });
-
-  res.json({ success: true, message: 'Request escalated', request });
 };
 
-// POST /api/requests/:id/reassign
-export const reassignRequest = (req: AuthenticatedRequest, res: Response) => {
-  const user = req.user!;
-  const { id } = req.params;
-  const { targetUserId } = req.body;
-  const request = db.requests.find(r => r.id === id);
-
-  if (!request) {
-    return res.status(404).json({ success: false, message: 'Request not found' });
+export const setRequestFlag = async (req: AuthenticatedRequest, res: Response) => {
+  if (!isAdmin(req.user!)) return res.status(403).json({ success: false, message: 'Only CEO or Chairman may flag requests' });
+  const flagged = req.method !== 'DELETE' && req.body.flagged !== false;
+  try {
+    const request = await mutateRequest(
+      req.params.id,
+      req.user!,
+      flagged ? 'Request flagged for oversight' : 'Request flag cleared',
+      (current, ts) => appendAudit({ ...current, flagged, flaggedAt: flagged ? ts : undefined }, req.user!, flagged ? 'Request flagged for oversight' : 'Request flag cleared', ts)
+    );
+    if (!request) return res.status(404).json({ success: false, message: 'Request not found' });
+    return res.json({ success: true, request: requestForViewer(request, req.user!) });
+  } catch (error) {
+    return errorResponse(res, error);
   }
+};
 
-  if (user.role !== 'CEO') {
-    return res.status(403).json({ success: false, message: 'Only the CEO can reassign escalated requests' });
+export const escalateRequest = async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const request = await mutateRequest(req.params.id, req.user!, 'Request escalated', (current, ts) => {
+      const assignedApprover = current.status === 'PENDING' && current.currentStage === req.user!.role;
+      const higherAuthority = req.user!.role === 'CEO' || req.user!.role === 'CHAIRMAN' || req.user!.role === 'GENERAL_MANAGER';
+      if (!assignedApprover && !higherAuthority) throw new Error('Only the assigned approver or higher authority can escalate');
+      if (current.status !== 'PENDING' || current.hoursIdle < 6) throw new Error('Only pending requests idle at least six business hours can be escalated');
+      return appendAudit(
+        { ...current, status: 'ESCALATED', currentStage: 'CEO', assignedRole: 'CEO', assignedUserId: undefined, hoursIdle: 0 },
+        req.user!,
+        'Escalated to CEO after SLA breach',
+        ts
+      );
+    });
+    if (!request) return res.status(404).json({ success: false, message: 'Request not found' });
+    return res.json({ success: true, request: requestForViewer(request, req.user!) });
+  } catch (error) {
+    return errorResponse(res, error);
   }
-  if (request.status !== 'ESCALATED') {
-    return res.status(400).json({ success: false, message: 'Only escalated requests can be reassigned' });
-  }
+};
 
-  const targetUser = db.users.find(candidate => candidate.id === targetUserId && candidate.id !== user.id);
-  if (!targetUser) {
-    return res.status(400).json({ success: false, message: 'Choose a valid user to receive this request' });
-  }
-
-  request.status = 'PENDING';
-  request.hoursIdle = 0;
-  request.assignedUserId = targetUser.id;
-  request.assignedRole = targetUser.role;
-  request.updatedAt = new Date().toISOString();
-  request.auditTrail.push({
-    ts: formatTimestamp(),
-    actor: user.name,
-    action: `Escalated request reassigned to ${targetUser.name} (${targetUser.role}) by CEO`
+export const reassignRequest = async (req: AuthenticatedRequest, res: Response) => {
+  if (!isAdmin(req.user!)) return res.status(403).json({ success: false, message: 'Only CEO or Chairman can reassign escalated requests' });
+  const target = await prisma.user.findFirst({
+    where: {
+      id: req.body.targetUserId,
+      isActive: true,
+      role: { notIn: ['CEO', 'CHAIRMAN', 'REQUESTER'] }
+    }
   });
-
-  res.json({ success: true, message: 'Request reassigned', request });
+  if (!target) return res.status(400).json({ success: false, message: 'Choose a valid active approver' });
+  try {
+    const request = await mutateRequest(req.params.id, req.user!, 'Escalated request reassigned', (current, ts) => {
+      if (current.status !== 'ESCALATED') throw new Error('Only escalated requests can be reassigned');
+      return appendAudit(
+        { ...current, status: 'PENDING', currentStage: target.role, assignedUserId: target.id, assignedRole: target.role, hoursIdle: 0 },
+        req.user!,
+        `Escalated request reassigned to ${target.name} (${target.role})`,
+        ts
+      );
+    });
+    if (!request) return res.status(404).json({ success: false, message: 'Request not found' });
+    return res.json({ success: true, request: requestForViewer(request, req.user!) });
+  } catch (error) {
+    return errorResponse(res, error);
+  }
 };

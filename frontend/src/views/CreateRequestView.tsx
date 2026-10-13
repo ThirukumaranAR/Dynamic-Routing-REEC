@@ -6,20 +6,69 @@ interface CreateRequestViewProps {
   user: User;
   onCreateRequest: (
     newReqData: Omit<ApprovalRequest, 'id' | 'date' | 'status' | 'businessHoursIdle' | 'auditTrail' | 'currentStage'>
-  ) => void;
+  ) => Promise<ApprovalRequest>;
 }
 
-  const requestTypes: RequestCategory[] = ['Leave', 'Permission', 'Purchase', 'Travel', 'Equipment', 'Reimbursement', 'Work From Home', 'Other'];
-  const detailFields: Record<RequestCategory, { key: string; label: string; type?: string }[]> = {
-    Leave: [{ key: 'leaveType', label: 'Leave type' }, { key: 'fromDate', label: 'From date', type: 'date' }, { key: 'toDate', label: 'To date', type: 'date' }, { key: 'days', label: 'Number of days', type: 'number' }, { key: 'reason', label: 'Reason' }],
-    Permission: [{ key: 'date', label: 'Date', type: 'date' }, { key: 'time', label: 'Time window' }, { key: 'permissionType', label: 'Permission type' }, { key: 'reason', label: 'Reason' }],
-    Purchase: [{ key: 'vendor', label: 'Vendor or supplier' }, { key: 'items', label: 'Items or services' }, { key: 'businessNeed', label: 'Business need' }],
-    Travel: [{ key: 'destination', label: 'Destination' }, { key: 'travelDates', label: 'Travel dates' }, { key: 'purpose', label: 'Travel purpose' }, { key: 'estimatedExpenses', label: 'Estimated expenses' }],
-    Equipment: [{ key: 'equipment', label: 'Equipment required' }, { key: 'quantity', label: 'Quantity', type: 'number' }, { key: 'businessNeed', label: 'Business need' }],
-    Reimbursement: [{ key: 'expenseDate', label: 'Expense date', type: 'date' }, { key: 'expenseType', label: 'Expense type' }, { key: 'receiptReference', label: 'Receipt reference' }],
-    'Work From Home': [{ key: 'date', label: 'Date', type: 'date' }, { key: 'reason', label: 'Reason' }, { key: 'availability', label: 'Availability plan' }],
-    Other: [{ key: 'details', label: 'Request details' }]
-  };
+const requestTypes: RequestCategory[] = [
+  'Leave',
+  'Permission',
+  'Purchase',
+  'Travel',
+  'Equipment',
+  'Reimbursement',
+  'Work From Home',
+  'Other'
+];
+
+const detailFields: Record<RequestCategory, { key: string; label: string; placeholder?: string; type?: string; fullWidth?: boolean }[]> = {
+  Leave: [
+    { key: 'leaveType', label: 'Leave type', placeholder: 'e.g. Casual / Medical / On-Duty Leave' },
+    { key: 'fromDate', label: 'From date', type: 'date' },
+    { key: 'toDate', label: 'To date', type: 'date' },
+    { key: 'days', label: 'Number of days', type: 'number', placeholder: 'e.g. 3' },
+    { key: 'reason', label: 'Reason for leave', placeholder: 'Brief explanation for leave request', fullWidth: true }
+  ],
+  Permission: [
+    { key: 'date', label: 'Permission Date', type: 'date' },
+    { key: 'time', label: 'Time window', placeholder: 'e.g. 2:00 PM - 4:00 PM' },
+    { key: 'permissionType', label: 'Permission type', placeholder: 'e.g. Academic / Official Duty / Personal' },
+    { key: 'reason', label: 'Reason for permission', placeholder: 'Specific purpose', fullWidth: true }
+  ],
+  Purchase: [
+    { key: 'vendor', label: 'Vendor or supplier', placeholder: 'e.g. Dell India / Fisher Scientific' },
+    { key: 'items', label: 'Items or services', placeholder: 'List of equipment / materials required' },
+    { key: 'businessNeed', label: 'Business need / Department use', placeholder: 'Justification for purchase', fullWidth: true }
+  ],
+  Travel: [
+    { key: 'destination', label: 'Destination', placeholder: 'e.g. Bangalore / IIT Madras' },
+    { key: 'travelDates', label: 'Travel dates / Duration', placeholder: 'e.g. 15th - 17th Oct' },
+    { key: 'purpose', label: 'Travel purpose', placeholder: 'e.g. Conference Paper Presentation / Workshop' },
+    { key: 'estimatedExpenses', label: 'Estimated expenses breakdown', placeholder: 'e.g. Travel + Accommodation + Registration' }
+  ],
+  Equipment: [
+    { key: 'equipment', label: 'Equipment required', placeholder: 'e.g. Digital Storage Oscilloscope' },
+    { key: 'quantity', label: 'Quantity', type: 'number', placeholder: 'e.g. 5' },
+    { key: 'businessNeed', label: 'Lab / Research purpose', placeholder: 'Intended lab and semester use', fullWidth: true }
+  ],
+  Reimbursement: [
+    { key: 'expenseDate', label: 'Expense date', type: 'date' },
+    { key: 'expenseType', label: 'Expense type', placeholder: 'e.g. Conference Fee / Lab Consumables / Travel' },
+    { key: 'receiptReference', label: 'Receipt / Invoice Number', placeholder: 'e.g. INV-90421 / GST-8812', fullWidth: true }
+  ],
+  'Work From Home': [
+    { key: 'date', label: 'WFH Date', type: 'date' },
+    { key: 'reason', label: 'Reason for WFH', placeholder: 'e.g. Health condition / Personal emergency' },
+    { key: 'availability', label: 'Availability & Connectivity plan', placeholder: 'Phone / Google Meet / Email access', fullWidth: true }
+  ],
+  Other: [
+    { key: 'customCategory', label: 'Nature / Sub-Type of Request *', placeholder: 'e.g. Industrial Visit, Workshop, Honorarium, Sponsorship, Event' },
+    { key: 'eventDate', label: 'Event / Requirement Date', type: 'date' },
+    { key: 'beneficiary', label: 'Target Beneficiaries & Headcount', placeholder: 'e.g. 60 III-Year CSE Students & 2 Faculty In-charge' },
+    { key: 'venue', label: 'Venue / Location / Lab', placeholder: 'e.g. Seminar Hall 3 / TCS Siruseri / AI Research Lab' },
+    { key: 'expectedOutcome', label: 'Expected Outcome & Academic Objective', placeholder: 'Key objectives and institutional benefits', fullWidth: true },
+    { key: 'additionalNotes', label: 'Additional Remarks & Arrangements', placeholder: 'e.g. Transport, guest accommodation, budget allocation notes', fullWidth: true }
+  ]
+};
 
 export const CreateRequestView: React.FC<CreateRequestViewProps> = ({
   user,
@@ -32,23 +81,45 @@ export const CreateRequestView: React.FC<CreateRequestViewProps> = ({
   const [details, setDetails] = useState<Record<string, string>>({});
   const [attachments, setAttachments] = useState<RequestAttachment[]>([]);
   const [isCreated, setIsCreated] = useState(false);
+  const [createdRequestId, setCreatedRequestId] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState('');
 
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
-      const newFiles: RequestAttachment[] = Array.from(e.target.files).map(file => {
+      const files = Array.from(e.target.files);
+      const existingBytes = attachments.reduce((total, attachment) => total + Math.floor((attachment.dataUrl?.length || 0) * 0.75), 0);
+      if (files.some(file => file.size > 10 * 1024 * 1024) || existingBytes + files.reduce((total, file) => total + file.size, 0) > 10 * 1024 * 1024) {
+        setError('Attachments must total 10 MB or less.');
+        e.target.value = '';
+        return;
+      }
+      try {
+      const newFiles: RequestAttachment[] = await Promise.all(files.map(async file => {
         const sizeMb = (file.size / (1024 * 1024)).toFixed(1);
         const sizeKb = (file.size / 1024).toFixed(0);
         const displaySize = file.size >= 1024 * 1024 ? `${sizeMb} MB` : `${sizeKb} KB`;
         const ext = file.name.split('.').pop()?.toUpperCase() || 'FILE';
+        const dataUrl = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(String(reader.result || ''));
+          reader.onerror = () => reject(new Error(`Could not read ${file.name}`));
+          reader.readAsDataURL(file);
+        });
 
         return {
           name: file.name,
           size: displaySize,
-          type: ext
+          type: ext,
+          dataUrl
         };
-      });
+      }));
 
       setAttachments(prev => [...prev, ...newFiles]);
+      setError('');
+      } catch (fileError) {
+        setError(fileError instanceof Error ? fileError.message : 'Could not read attachment.');
+      }
       e.target.value = '';
     }
   };
@@ -57,36 +128,45 @@ export const CreateRequestView: React.FC<CreateRequestViewProps> = ({
     setAttachments(prev => prev.filter((_, idx) => idx !== indexToRemove));
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!title.trim() || !amount) return;
+    const parsedAmount = Number(amount);
+    if (!title.trim() || amount.trim() === '' || isNaN(parsedAmount) || parsedAmount < 0 || submitting) return;
 
-    onCreateRequest({
+    setSubmitting(true);
+    setError('');
+    try {
+    const created = await onCreateRequest({
       title: title.trim(),
       department: user.dept,
       purpose: description.trim(),
-      amount: parseInt(amount, 10),
+      amount: parsedAmount,
       category,
       requester: user.name,
       description: description.trim(),
-      company: user.company,
-      businessUnit: user.businessUnit,
+      company: user.company || 'FlowNexus',
+      businessUnit: user.businessUnit || 'Main',
+      campus: user.campus || 'Main',
       requestType: category,
       requestDetails: details,
-      attachments: attachments.length > 0 ? attachments : [
-        { name: `${title.trim().replace(/\s+/g, '_')}_Document.pdf`, size: '1.2 MB', type: 'PDF' }
-      ]
+      attachments
     });
 
+    setCreatedRequestId(created.id);
     setIsCreated(true);
+    } catch (submitError) {
+      setError(submitError instanceof Error ? submitError.message : 'Request submission failed.');
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   return (
-    <div className="px-6 py-6 max-w-2xl">
+    <div className="w-full px-6 py-6">
       <div className="mb-6">
-            <h1 className="text-2xl font-bold text-slate-900 mb-1">Add Request</h1>
+        <h1 className="text-2xl font-bold text-slate-900 mb-1">Create New Request</h1>
         <p className="text-sm text-slate-400">
-            Submit a company request with details tailored to its request type.
+          Submit an institutional expenditure or approval request tailored to its specific type.
         </p>
       </div>
 
@@ -97,10 +177,12 @@ export const CreateRequestView: React.FC<CreateRequestViewProps> = ({
           </div>
           <p className="text-green-800 font-bold text-base">Request Submitted Successfully!</p>
           <p className="text-green-600 text-xs mt-1">
-            Assigned to your Line Manager in the queue. Redirecting to All Requests…
+            {createdRequestId} was saved and assigned to your Line Manager.
           </p>
         </div>
       ) : (
+        <>
+        {error && <div role="alert" className="mb-4 border-l-4 border-red-600 bg-red-50 px-4 py-3 text-sm text-red-800">{error}</div>}
         <form
           onSubmit={handleSubmit}
           className="bg-white rounded-xl border border-slate-100 shadow-sm px-6 py-6 space-y-5"
@@ -115,19 +197,22 @@ export const CreateRequestView: React.FC<CreateRequestViewProps> = ({
               onChange={e => setTitle(e.target.value)}
               required
               className="w-full border border-slate-200 rounded-lg px-3.5 py-2.5 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500"
-              placeholder="e.g. Purchase of Lab Workstations"
+              placeholder="e.g. Industrial Visit to TCS Chennai / Purchase of Lab Workstations"
             />
           </div>
 
           <div className="grid grid-cols-2 gap-4">
             <div>
               <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wide mb-1.5">
-                  Request Type
+                Request Type
               </label>
               <select
                 value={category}
-                onChange={e => setCategory(e.target.value as RequestCategory)}
-                className="w-full border border-slate-200 rounded-lg px-3.5 py-2.5 text-sm text-slate-800 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                onChange={e => {
+                  setCategory(e.target.value as RequestCategory);
+                  setDetails({});
+                }}
+                className="w-full border border-slate-200 rounded-lg px-3.5 py-2.5 text-sm text-slate-800 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 cursor-pointer"
               >
                 {requestTypes.map(type => (
                   <option key={type} value={type}>
@@ -139,23 +224,23 @@ export const CreateRequestView: React.FC<CreateRequestViewProps> = ({
 
             <div>
               <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wide mb-1.5">
-                Cost <span className="text-red-500">*</span>
+                Estimated Cost / Amount (INR) <span className="text-red-500">*</span>
               </label>
               <input
                 type="number"
                 value={amount}
                 onChange={e => setAmount(e.target.value)}
                 required
-                min="1"
+                min="0"
                 className="w-full border border-slate-200 rounded-lg px-3.5 py-2.5 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                placeholder="e.g. 1500"
+                placeholder="e.g. 100000"
               />
             </div>
           </div>
 
           <div>
             <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wide mb-1.5">
-              Purpose <span className="text-red-500">*</span>
+              Purpose &amp; Justification <span className="text-red-500">*</span>
             </label>
             <textarea
               rows={3}
@@ -163,17 +248,32 @@ export const CreateRequestView: React.FC<CreateRequestViewProps> = ({
               onChange={e => setDescription(e.target.value)}
               required
               className="w-full border border-slate-200 rounded-lg px-3.5 py-2.5 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
-              placeholder="Explain the business purpose of this request..."
+              placeholder="Explain the operational or academic purpose and justification for this request..."
             />
           </div>
 
-          <div className="border-t border-slate-100 pt-4">
-            <p className="block text-xs font-semibold text-slate-700 uppercase tracking-wide mb-3">{category} Details</p>
+          {/* Dynamic Category Specific Details Section */}
+          <div className="border-t border-slate-100 pt-4 bg-slate-50/50 -mx-6 px-6 py-4 rounded-lg">
+            <div className="flex items-center justify-between mb-3">
+              <p className="text-xs font-bold text-slate-800 uppercase tracking-wide flex items-center gap-1.5">
+                <span>📋</span> {category === 'Other' ? 'Custom / Special Request Specific Details' : `${category} Details`}
+              </p>
+              <span className="text-[10px] text-slate-400">Fill in specific parameters</span>
+            </div>
+
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               {detailFields[category].map(field => (
-                <div key={field.key}>
-                  <label className="block text-xs font-semibold text-slate-600 mb-1">{field.label}</label>
-                  <input type={field.type || 'text'} value={details[field.key] || ''} onChange={e => setDetails({ ...details, [field.key]: e.target.value })} className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm" />
+                <div key={field.key} className={field.fullWidth ? 'sm:col-span-2' : ''}>
+                  <label className="block text-xs font-semibold text-slate-600 mb-1">
+                    {field.label}
+                  </label>
+                  <input
+                    type={field.type || 'text'}
+                    value={details[field.key] || ''}
+                    placeholder={field.placeholder}
+                    onChange={e => setDetails({ ...details, [field.key]: e.target.value })}
+                    className="w-full border border-slate-200 bg-white rounded-lg px-3 py-2 text-xs text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
                 </div>
               ))}
             </div>
@@ -246,17 +346,18 @@ export const CreateRequestView: React.FC<CreateRequestViewProps> = ({
 
           <div className="pt-2 border-t border-slate-100 flex items-center justify-between">
             <p className="text-[11px] text-slate-400">
-              Business Unit: <strong className="text-slate-600">{user.businessUnit}</strong>
+              Department: <strong className="text-slate-600">{user.dept}</strong> ({user.campus || 'Main'})
             </p>
             <button
               type="submit"
-              disabled={!title.trim() || !amount}
+              disabled={!title.trim() || !amount || submitting}
               className="bg-blue-600 hover:bg-blue-700 disabled:opacity-40 text-white font-semibold text-xs px-6 py-2.5 rounded-lg transition shadow-sm cursor-pointer"
             >
-              Submit Request to Line Manager
+              {submitting ? 'Submitting…' : 'Submit Request to Line Manager'}
             </button>
           </div>
         </form>
+        </>
       )}
     </div>
   );

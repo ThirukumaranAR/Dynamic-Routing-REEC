@@ -1,6 +1,16 @@
 import React, { useState, useEffect } from 'react';
-import { User, ApprovalRequest, RequestStatus, RequestAttachment, ApprovalStage } from '../services/types';
-import { formatCurrencyINR, getNextStage, getRoleDisplayName, getStageActorName, isCurrentlyBusinessHours } from '../services/api';
+import {
+  User,
+  ApprovalRequest,
+  RequestStatus,
+  RequestAttachment,
+  WorkflowBranch,
+  PostDeanBranch,
+  POST_DEAN_BRANCHES,
+  STANDARD_ROLES
+} from '../services/types';
+import { canViewActiveQuery, formatCurrencyINR, getRoleDisplayName, getStageActorName } from '../services/api';
+import { getNextWorkflowRole } from '../services/workflowEngine';
 import { StatusBadge } from '../components/StatusBadge';
 import { Icon } from '../components/Icons';
 
@@ -15,13 +25,11 @@ interface AllRequestsViewProps {
     requestId: string,
     newStatus: RequestStatus,
     actionDesc: string,
-    extra?: Partial<ApprovalRequest>
-  ) => void;
-  onAdvanceStage: (
-    requestId: string,
-    nextStage: ApprovalStage,
-    actionDesc: string
-  ) => void;
+    extra?: Partial<ApprovalRequest> & { queryResponse?: string }
+  ) => Promise<void>;
+  onApproveStep: (requestId: string, higherAuthorityOverride?: boolean) => Promise<void>;
+  onRouteToBranch: (requestId: string, branch: WorkflowBranch) => Promise<void>;
+  onMigrateWorkflow?: (requestId: string, reason: string, replacementRole?: string, targetVersionId?: string) => Promise<void>;
 }
 
 const statusFilters: (RequestStatus | 'ALL')[] = [
@@ -41,7 +49,9 @@ export const AllRequestsView: React.FC<AllRequestsViewProps> = ({
   onSelectRequest,
   onFilterChange,
   onUpdateStatus,
-  onAdvanceStage
+  onApproveStep,
+  onRouteToBranch,
+  onMigrateWorkflow
 }) => {
   const [queryText, setQueryText] = useState('');
   const [revisedTitle, setRevisedTitle] = useState('');
@@ -50,13 +60,33 @@ export const AllRequestsView: React.FC<AllRequestsViewProps> = ({
   const [responseExplanation, setResponseExplanation] = useState('');
   const [viewingDocument, setViewingDocument] = useState<RequestAttachment | null>(null);
 
-  // Manager's branch selection state
-  const [selectedBranch, setSelectedBranch] = useState<'HR' | 'IT' | 'FINANCE'>('FINANCE');
+  // Post-Dean Branch selection state (IT, Audit, HR, MMI)
+  const [selectedBranch, setSelectedBranch] = useState<PostDeanBranch>('HR');
+
+  // CEO Workflow Migration Modal State
+  const [migrationModalOpen, setMigrationModalOpen] = useState(false);
+  const [migrationReason, setMigrationReason] = useState('');
+  const [migrationRole, setMigrationRole] = useState('GENERAL_MANAGER');
+  const [migrationConfirmed, setMigrationConfirmed] = useState(false);
 
   // Success Feedback Message on Action
   const [actionSuccessMsg, setActionSuccessMsg] = useState<string>('');
+  const [actionErrorMsg, setActionErrorMsg] = useState<string>('');
+  const [actionLoading, setActionLoading] = useState(false);
 
-  const isBusinessTime = isCurrentlyBusinessHours();
+  const runAction = async (operation: () => Promise<void>, successMessage: string) => {
+    setActionLoading(true);
+    setActionErrorMsg('');
+    setActionSuccessMsg('');
+    try {
+      await operation();
+      setActionSuccessMsg(successMessage);
+    } catch (error) {
+      setActionErrorMsg(error instanceof Error ? error.message : 'The request action failed.');
+    } finally {
+      setActionLoading(false);
+    }
+  };
 
   useEffect(() => {
     if (selectedRequest) {
@@ -66,48 +96,60 @@ export const AllRequestsView: React.FC<AllRequestsViewProps> = ({
       setResponseExplanation('');
       setActionSuccessMsg('');
 
-      if (selectedRequest.category === 'Leave' || selectedRequest.category === 'Permission') setSelectedBranch('HR');
-      else if (selectedRequest.category === 'Travel' || selectedRequest.category === 'Purchase' || selectedRequest.category === 'Reimbursement') setSelectedBranch('FINANCE');
-      else setSelectedBranch('IT');
+      if (selectedRequest.selectedBranch && (POST_DEAN_BRANCHES as readonly string[]).includes(selectedRequest.selectedBranch)) {
+        setSelectedBranch(selectedRequest.selectedBranch as PostDeanBranch);
+      } else {
+        setSelectedBranch('HR');
+      }
     }
   }, [selectedRequest]);
 
-  const visibleRequests = user.role === 'REQUESTER' ? requests.filter(request => request.requester === user.name && request.status !== 'QUERIED' && request.status !== 'ESCALATED') : requests;
+  const visibleRequests = requests.filter(request =>
+    canViewActiveQuery(request, user) &&
+    (user.role !== 'REQUESTER' || (request.requesterId
+      ? request.requesterId === user.id
+      : request.requesterEmail
+      ? request.requesterEmail.toLowerCase() === user.email.toLowerCase()
+      : request.requester === user.name))
+  );
 
   const filteredRequests = statusFilter === 'ALL'
     ? visibleRequests
     : visibleRequests.filter(r => r.status === statusFilter);
 
-  const req = selectedRequest;
+  const req = selectedRequest && canViewActiveQuery(selectedRequest, user) ? selectedRequest : null;
 
-  const getStageList = (request: ApprovalRequest) => {
-    if (request.currentStage === 'FINANCE' || request.currentStage === 'ACCOUNTANT' || request.category === 'Travel' || request.category === 'Purchase' || request.category === 'Reimbursement') {
-      return ['REQUESTER', 'MANAGER', 'FINANCE', 'ACCOUNTANT', 'GENERAL_MANAGER', 'CEO'];
-    }
-    if (request.currentStage === 'HR' || request.category === 'Leave' || request.category === 'Permission') {
-      return ['REQUESTER', 'MANAGER', 'HR', 'GENERAL_MANAGER', 'CEO'];
-    }
-    return ['REQUESTER', 'MANAGER', 'IT', 'GENERAL_MANAGER', 'CEO'];
-  };
+  const isHigherAuthority = user.role === 'CEO' || user.role === 'CHAIRMAN' || user.role === 'DEAN';
+  const isMyTurnToApprove = req && req.status === 'PENDING' && req.currentStage === user.role;
+  const canReviewEscalated = req?.status === 'ESCALATED' && (user.role === 'CEO' || user.role === 'CHAIRMAN');
+  const canReviewDelayed = req?.status === 'PENDING' && req.businessHoursIdle >= 6 && isHigherAuthority;
+  const canReviewCeoStep = req?.status === 'PENDING' && req.currentStage === 'CEO' && user.role === 'CHAIRMAN';
+  const canRouteBranch = req && req.status === 'PENDING' && (user.role === 'DEAN' || user.role === 'INSTITUTION_MANAGER' || isHigherAuthority);
 
-  const isHigherAuthority = user.role === 'CEO' || user.role === 'GENERAL_MANAGER';
-
-  // Strict role-stage lock:
-  const isMyTurnToApprove = req && (
-    (user.role === 'MANAGER' && req.currentStage === 'MANAGER' && req.status === 'PENDING') ||
-    (user.role === 'FINANCE' && req.currentStage === 'FINANCE' && req.status === 'PENDING') ||
-    (user.role === 'ACCOUNTANT' && req.currentStage === 'ACCOUNTANT' && req.status === 'PENDING') ||
-    (user.role === 'HR' && req.currentStage === 'HR' && req.status === 'PENDING') ||
-    (user.role === 'IT' && req.currentStage === 'IT' && req.status === 'PENDING') ||
-    (user.role === 'GENERAL_MANAGER' && (req.currentStage === 'GENERAL_MANAGER' || (req.businessHoursIdle >= 6 && req.status === 'PENDING')) && req.status !== 'APPROVED' && req.status !== 'REJECTED') ||
-    (user.role === 'CEO' && (req.currentStage === 'CEO' || req.status === 'ESCALATED' || (req.businessHoursIdle >= 6 && req.status === 'PENDING')) && req.status !== 'APPROVED' && req.status !== 'REJECTED')
-  );
-
-  // Filter out internal queries & replies from the public audit trail:
   const publicAuditTrail = req?.auditTrail.filter(entry => {
     const act = entry.action.toLowerCase();
     return !act.includes('query raised') && !act.includes('clarification response') && !act.includes('query:');
   }) || [];
+
+  const handleMigrationSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!req || !onMigrateWorkflow) return;
+    if (!migrationReason.trim()) {
+      setActionErrorMsg('A reason is required to migrate the request workflow.');
+      return;
+    }
+    if (!migrationConfirmed) {
+      setActionErrorMsg('Please confirm the migration before proceeding.');
+      return;
+    }
+
+    await runAction(async () => {
+      await onMigrateWorkflow(req.id, migrationReason.trim(), migrationRole);
+      setMigrationModalOpen(false);
+      setMigrationReason('');
+      setMigrationConfirmed(false);
+    }, `Successfully migrated workflow: pending stage transitioned to ${getRoleDisplayName(migrationRole)}.`);
+  };
 
   return (
     <div className="flex h-full">
@@ -115,58 +157,56 @@ export const AllRequestsView: React.FC<AllRequestsViewProps> = ({
       <div
         className={`${
           selectedRequest ? 'hidden md:flex' : 'flex'
-        } flex-col w-full md:w-96 border-r border-slate-100 flex-shrink-0 overflow-hidden bg-white`}
+        } w-full md:w-80 lg:w-96 border-r border-slate-100 flex-col bg-white flex-shrink-0 h-full overflow-hidden`}
       >
-        <div className="px-5 py-4 border-b border-slate-100 bg-white">
-          <div className="flex items-center justify-between mb-3">
-            <h2 className="text-base font-bold text-slate-800">All Tracked Requests</h2>
-            <span className="text-[11px] font-semibold text-slate-400 bg-slate-100 px-2 py-0.5 rounded-full">
-              {filteredRequests.length} Requests
-            </span>
-          </div>
-          <div className="flex gap-1.5 flex-wrap">
-            {statusFilters.filter(sf => user.role !== 'REQUESTER' || (sf !== 'QUERIED' && sf !== 'ESCALATED')).map(sf => (
-              <button
-                key={sf}
-                onClick={() => onFilterChange(sf)}
-                className={`px-2.5 py-1 rounded-full text-xs font-medium transition ${
-                  statusFilter === sf
-                    ? 'bg-blue-600 text-white shadow-xs font-semibold'
-                    : 'bg-slate-100 text-slate-500 hover:bg-slate-200'
-                }`}
-              >
-                {sf}
-              </button>
-            ))}
+        {/* Filter Pills */}
+        <div className="p-3 border-b border-slate-100 bg-white">
+          <div className="flex gap-1 overflow-x-auto pb-1">
+            {statusFilters.map(filter => {
+              const count = filter === 'ALL'
+                ? visibleRequests.length
+                : visibleRequests.filter(r => r.status === filter).length;
+              const isActive = statusFilter === filter;
+
+              return (
+                <button
+                  key={filter}
+                  onClick={() => onFilterChange(filter)}
+                  className={`text-xs px-2.5 py-1 rounded-full whitespace-nowrap font-medium transition cursor-pointer flex items-center gap-1 ${
+                    isActive
+                      ? 'bg-blue-600 text-white shadow-2xs font-semibold'
+                      : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                  }`}
+                >
+                  <span>{filter}</span>
+                  <span
+                    className={`text-[10px] rounded-full px-1.5 py-0.2 ${
+                      isActive ? 'bg-blue-700 text-white' : 'bg-slate-200 text-slate-600'
+                    }`}
+                  >
+                    {count}
+                  </span>
+                </button>
+              );
+            })}
           </div>
         </div>
 
-        <div className="flex-1 overflow-y-auto bg-white">
-          {filteredRequests.map((r, idx) => {
+        {/* Requests Feed */}
+        <div className="flex-1 overflow-y-auto divide-y divide-slate-100">
+          {filteredRequests.map(r => {
+            const isSelected = selectedRequest?.id === r.id;
+            const isActionNeededByMe = r.status === 'PENDING' && r.currentStage === user.role;
             const is6hSlaBreached = r.businessHoursIdle >= 6;
-            const isActionNeededByMe = (
-              (user.role === 'MANAGER' && r.currentStage === 'MANAGER' && r.status === 'PENDING') ||
-              (user.role === 'FINANCE' && r.currentStage === 'FINANCE' && r.status === 'PENDING') ||
-              (user.role === 'ACCOUNTANT' && r.currentStage === 'ACCOUNTANT' && r.status === 'PENDING') ||
-              (user.role === 'HR' && r.currentStage === 'HR' && r.status === 'PENDING') ||
-              (user.role === 'IT' && r.currentStage === 'IT' && r.status === 'PENDING') ||
-              (user.role === 'GENERAL_MANAGER' && r.currentStage === 'GENERAL_MANAGER' && r.status === 'PENDING') ||
-              (user.role === 'CEO' && (r.currentStage === 'CEO' || r.status === 'ESCALATED') && r.status !== 'APPROVED' && r.status !== 'REJECTED')
-            );
 
             return (
               <button
                 key={r.id}
-                onClick={() => {
-                  onSelectRequest(r);
-                  setActionSuccessMsg('');
-                }}
-                className={`w-full text-left px-5 py-3.5 hover:bg-blue-50/50 transition ${
-                  idx === 0 ? '' : 'border-t border-slate-100'
-                } ${
-                  selectedRequest?.id === r.id
-                    ? 'bg-blue-50 border-l-4 border-l-blue-600'
-                    : ''
+                onClick={() => onSelectRequest(r)}
+                className={`w-full text-left p-4 transition cursor-pointer ${
+                  isSelected
+                    ? 'bg-blue-50/70 border-l-4 border-blue-600'
+                    : 'hover:bg-slate-50'
                 }`}
               >
                 <div className="flex items-start justify-between gap-2 mb-1">
@@ -175,8 +215,7 @@ export const AllRequestsView: React.FC<AllRequestsViewProps> = ({
                   </p>
                   <StatusBadge status={r.status} />
                 </div>
-                
-                {/* PROMINENT STAGE BADGE IN LIST */}
+
                 <div className="flex items-center gap-1.5 flex-wrap my-1.5">
                   <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
                     r.status === 'APPROVED'
@@ -185,7 +224,7 @@ export const AllRequestsView: React.FC<AllRequestsViewProps> = ({
                       ? 'bg-red-100 text-red-800'
                       : 'bg-indigo-100 text-indigo-800 border border-indigo-200'
                   }`}>
-                    📍 Stage: {r.currentStage.replace('_', ' ')}
+                    📍 Stage: {getRoleDisplayName(r.currentStage)}
                   </span>
 
                   {isActionNeededByMe && (
@@ -242,41 +281,16 @@ export const AllRequestsView: React.FC<AllRequestsViewProps> = ({
             ← Back to list
           </button>
 
-          {/* HIGHER AUTHORITY FLAGGED BANNER */}
-          {req.businessHoursIdle >= 6 && (
-            <div className="mb-4 bg-gradient-to-r from-amber-50 to-red-50 border-2 border-amber-300 rounded-xl p-4 flex items-center justify-between gap-3 text-amber-900 shadow-sm animate-in fade-in">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-full bg-amber-500 text-white flex items-center justify-center font-bold text-lg flex-shrink-0">
-                  🚩
-                </div>
-                <div>
-                  <div className="flex items-center gap-2">
-                    <p className="text-xs font-black uppercase tracking-wider text-amber-900">
-                      FLAGGED FOR HIGHER AUTHORITY REVIEW (&gt;6H IDLE AT {getRoleDisplayName(req.currentStage).toUpperCase()})
-                    </p>
-                    <span className="bg-amber-600 text-white text-[10px] font-bold px-2 py-0.5 rounded">
-                      {req.businessHoursIdle}h / 6h SLA
-                    </span>
-                  </div>
-                  <p className="text-xs text-amber-800 mt-1 font-medium">
-                    This request is flagged to the Higher Authority ({getRoleDisplayName(user.role === 'CEO' ? 'CEO' : 'GENERAL_MANAGER')}). Higher Authority decides whether to manually flag it to the next official, send a query, or grant clearance.
-                  </p>
-                </div>
-              </div>
-              <span className="bg-amber-600 text-white text-[11px] font-bold px-3.5 py-1.5 rounded-lg uppercase tracking-wider flex-shrink-0 shadow-2xs">
-                FLAGGED
-              </span>
-            </div>
-          )}
-
-          {/* PROMINENT ACTIVE STAGE & HANDLER BANNER */}
+          {/* ACTIVE STAGE & HANDLER BANNER */}
           <div className="mb-4 bg-gradient-to-r from-blue-900 to-indigo-900 text-white rounded-xl p-4 shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <div className="flex items-center gap-3">
               <div className="w-10 h-10 rounded-xl bg-white/10 border border-white/20 flex items-center justify-center text-lg flex-shrink-0">
                 📍
               </div>
               <div>
-                <p className="text-[10px] font-bold text-blue-200 uppercase tracking-widest">CURRENT APPROVAL STAGE</p>
+                <p className="text-[10px] font-bold text-blue-200 uppercase tracking-widest">
+                  CURRENT APPROVAL STAGE · WORKFLOW v{req.workflowVersionNumber || 1}
+                </p>
                 <h3 className="text-base font-bold text-white tracking-tight">
                   {getRoleDisplayName(req.currentStage)}
                 </h3>
@@ -286,6 +300,11 @@ export const AllRequestsView: React.FC<AllRequestsViewProps> = ({
               </div>
             </div>
             <div className="flex items-center gap-2 flex-shrink-0">
+              {req.selectedBranch && (
+                <span className="rounded bg-amber-500/20 border border-amber-300 text-amber-200 px-2.5 py-1 text-xs font-bold">
+                  Branch: {req.selectedBranch}
+                </span>
+              )}
               <span className={`px-3 py-1 rounded-lg text-xs font-bold ${
                 req.status === 'APPROVED' ? 'bg-green-500 text-white' : req.status === 'REJECTED' ? 'bg-red-500 text-white' : 'bg-blue-500 text-white'
               }`}>
@@ -294,182 +313,95 @@ export const AllRequestsView: React.FC<AllRequestsViewProps> = ({
             </div>
           </div>
 
-          {/* Multi-Tier Approval Chain Stepper */}
-          <div className="bg-white rounded-xl border border-slate-100 shadow-sm p-4 mb-4">
-            <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2.5">
-              APPROVAL HIERARCHY PROGRESS: REQUESTER → MANAGER (HR / IT / FINANCE → ACCOUNTANT) → GM → CEO
-            </p>
-            <div className="flex flex-wrap items-center gap-2">
-              {getStageList(req).map((st, sIdx, arr) => {
-                const isCurrent = req.currentStage === st && req.status !== 'APPROVED';
-                const isPassed = req.status === 'APPROVED' || arr.indexOf(req.currentStage) > sIdx;
-
-                return (
-                  <React.Fragment key={st}>
-                    <span
-                      className={`inline-flex items-center gap-1 px-3 py-1 rounded-md text-xs font-semibold border transition-all ${
-                        isCurrent
-                          ? 'bg-blue-600 text-white border-blue-600 shadow-md ring-2 ring-blue-400/40 font-bold scale-105'
-                          : isPassed
-                          ? 'bg-green-50 text-green-700 border-green-200'
-                          : 'bg-slate-50 text-slate-400 border-slate-200'
-                      }`}
-                    >
-                      {isPassed && <span>✓</span>}
-                      {isCurrent && <span className="w-1.5 h-1.5 rounded-full bg-white animate-ping mr-0.5" />}
-                      {st.replace('_', ' ')}
-                    </span>
-                    {sIdx < arr.length - 1 && (
-                      <span className="text-slate-300 font-bold text-xs">→</span>
-                    )}
-                  </React.Fragment>
-                );
-              })}
-            </div>
-          </div>
-
-          {/* Request Header Card */}
-          <div className="bg-white rounded-xl border border-slate-100 shadow-sm overflow-hidden mb-4">
-            <div className="flex items-start justify-between gap-4 px-6 pt-5 pb-4 border-b border-slate-100">
+          {/* CEO Governance & Request Workflow View (PART E) */}
+          <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-4 mb-4 space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 pb-2.5">
               <div>
-                <div className="flex items-center gap-2 mb-1.5 flex-wrap">
-                  <span className="text-xs font-mono font-bold text-blue-600 bg-blue-50 px-2 py-0.5 rounded">
-                    {req.id}
+                <h3 className="text-xs font-bold text-slate-900 uppercase tracking-wider flex items-center gap-1.5">
+                  <span>🏛️ Request Workflow History & Sequence</span>
+                  <span className="rounded bg-blue-100 px-2 py-0.5 text-[10px] font-bold text-blue-800">
+                    Version v{req.workflowVersionNumber || 1}
                   </span>
-                  <span className="text-xs text-slate-500 font-semibold bg-slate-100 px-2 py-0.5 rounded">
-                    {req.category}
-                  </span>
-                  <span className="text-xs font-bold text-indigo-700 bg-indigo-50 border border-indigo-200 px-2.5 py-0.5 rounded">
-                    Active Handler: {getStageActorName(req.currentStage)}
-                  </span>
-                </div>
-                <h2 className="text-lg font-bold text-slate-900">{req.title}</h2>
-                <p className="text-xs text-slate-500 mt-1">
-                  Submitted by <strong className="text-slate-700">{req.requester}</strong> ({req.department} · {req.company || user.company})
+                </h3>
+                <p className="text-xs text-slate-500">
+                  Immutable captured sequence for this request. Historical decisions remain intact.
                 </p>
               </div>
-              <div className="text-right flex-shrink-0">
-                <p className="text-2xl font-bold text-slate-900">
-                  {formatCurrencyINR(req.amount)}
-                </p>
-                <p className="text-xs text-slate-400 mt-0.5">{req.date}</p>
-                <div className="mt-2">
-                  <StatusBadge status={req.status} />
-                </div>
-              </div>
-            </div>
 
-            {/* 6-Hour Business SLA Monitor Bar */}
-            <div className="bg-slate-50/80 px-6 py-3 border-b border-slate-100 grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
-              <div>
-                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
-                  BUSINESS SLA POLICY (MON-FRI 9AM-5PM)
-                </p>
-                <p className="font-semibold text-slate-700 mt-0.5">
-                  ⏱️ 6-Hour Review Flag System
-                </p>
-                <p className="text-[10px] text-slate-400 mt-0.5">
-                  {isBusinessTime ? '🟢 SLA Clock Running' : '🌙 SLA Paused (Outside 9AM-5PM / Weekend)'}
-                </p>
-              </div>
-              <div>
-                <div className="flex items-center justify-between mb-1">
-                  <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
-                    SLA PROGRESS AT CURRENT ROLE
-                  </p>
-                  <span
-                    className={`font-mono text-[11px] font-bold ${
-                      req.businessHoursIdle >= 6 ? 'text-amber-600 font-bold' : 'text-slate-600'
-                    }`}
-                  >
-                    {req.businessHoursIdle}h / 6.0h SLA Limit
-                  </span>
-                </div>
-                <div className="w-full bg-slate-200 h-2 rounded-full overflow-hidden">
-                  <div
-                    className={`h-full rounded-full transition-all ${
-                      req.businessHoursIdle >= 6
-                        ? 'bg-amber-500'
-                        : req.businessHoursIdle >= 4.5
-                        ? 'bg-amber-400'
-                        : 'bg-blue-500'
-                    }`}
-                    style={{
-                      width: `${Math.min(100, (req.businessHoursIdle / 6) * 100)}%`
-                    }}
-                  />
-                </div>
-              </div>
-            </div>
-
-            {/* Description */}
-            <div className="px-6 py-4 border-b border-slate-100">
-              <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-1.5">
-                Description & Justification
-              </p>
-              <p className="text-sm text-slate-700 leading-relaxed">
-                {req.description}
-              </p>
-            </div>
-
-            {/* Attached Documents */}
-            <div className="px-6 py-4 bg-slate-50/50">
-              <div className="flex items-center justify-between mb-2.5">
-                <p className="text-xs font-bold text-slate-700 uppercase tracking-wider flex items-center gap-1.5">
-                  <span>📎</span> Relevant Documents & Quotations ({req.attachments?.length || 0})
-                </p>
-                <span className="text-[11px] text-slate-400">Click to preview document proof</span>
-              </div>
-
-              {req.attachments && req.attachments.length > 0 ? (
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                  {req.attachments.map((doc, dIdx) => (
-                    <div
-                      key={dIdx}
-                      className="bg-white border border-slate-200/80 rounded-lg p-3 flex items-center justify-between shadow-2xs hover:border-blue-400 transition"
-                    >
-                      <div className="flex items-center gap-2.5 overflow-hidden">
-                        <div className="w-8 h-8 rounded bg-blue-50 text-blue-700 border border-blue-100 flex items-center justify-center text-xs font-bold flex-shrink-0">
-                          {doc.type}
-                        </div>
-                        <div className="overflow-hidden">
-                          <p className="text-xs font-semibold text-slate-800 truncate">
-                            {doc.name}
-                          </p>
-                          <p className="text-[10px] text-slate-400">{doc.size} · Verified</p>
-                        </div>
-                      </div>
-
-                      <button
-                        onClick={() => setViewingDocument(doc)}
-                        className="flex items-center gap-1 bg-blue-50 hover:bg-blue-600 hover:text-white text-blue-700 text-xs font-semibold px-2.5 py-1.5 rounded-md transition flex-shrink-0 cursor-pointer"
-                      >
-                        <Icon name="eye" className="w-3.5 h-3.5" />
-                        View Document
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <p className="text-xs text-slate-400 italic">No external document files attached.</p>
+              {/* CEO Migration Trigger (PART E & F) */}
+              {(user.role === 'CEO' || user.role === 'CHAIRMAN') && req.status === 'PENDING' && onMigrateWorkflow && (
+                <button
+                  type="button"
+                  onClick={() => setMigrationModalOpen(true)}
+                  className="rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white px-3 py-1.5 text-xs font-bold transition shadow-xs flex items-center gap-1.5"
+                >
+                  <span>👑 Modify / Migrate Remaining Stages</span>
+                </button>
               )}
             </div>
+
+            {/* Stages Tracker */}
+            <div className="flex flex-wrap items-center gap-2 py-1">
+              <div className="flex items-center gap-1.5 rounded-lg border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-xs font-bold text-emerald-800">
+                <span>✓ Requester (Submitted)</span>
+              </div>
+              <span className="text-slate-300 font-bold">→</span>
+
+              {req.stages && req.stages.length > 0 ? (
+                req.stages.map((stg, sIdx) => {
+                  let badgeClass = 'border-slate-200 bg-slate-50 text-slate-500';
+                  let icon = '⏳';
+                  let statusText = '';
+
+                  if (stg.status === 'COMPLETED') {
+                    badgeClass = 'border-emerald-200 bg-emerald-50 text-emerald-800 font-bold';
+                    icon = '✓';
+                    statusText = stg.decidedByName ? `(${stg.decidedByName})` : '';
+                  } else if (stg.status === 'PENDING') {
+                    badgeClass = 'border-blue-500 bg-blue-50 text-blue-800 font-bold ring-2 ring-blue-300';
+                    icon = '📍 Active:';
+                  } else if (stg.status === 'SUPERSEDED') {
+                    badgeClass = 'border-purple-200 bg-purple-50 text-purple-700 line-through';
+                    icon = '⚠️ Superseded:';
+                  } else if (stg.status === 'SKIPPED') {
+                    badgeClass = 'border-slate-200 bg-slate-100 text-slate-400 line-through';
+                    icon = '⊘ Skipped:';
+                  } else if (stg.status === 'REJECTED') {
+                    badgeClass = 'border-red-200 bg-red-50 text-red-800 font-bold';
+                    icon = '✕ Rejected:';
+                  }
+
+                  return (
+                    <React.Fragment key={stg.id || sIdx}>
+                      <div className={`flex items-center gap-1 rounded-lg border px-2.5 py-1 text-xs ${badgeClass}`}>
+                        <span>{icon} {stg.label}</span>
+                        {statusText && <span className="text-[10px] text-emerald-700">{statusText}</span>}
+                      </div>
+                      {sIdx < req.stages!.length - 1 && (
+                        <span className="text-slate-300 font-bold">→</span>
+                      )}
+                    </React.Fragment>
+                  );
+                })
+              ) : (
+                <span className="text-xs text-slate-500">Standard Sequential Progression</span>
+              )}
+            </div>
+
+            {/* Past Migration Events Log */}
+            {req.migrationEvents && req.migrationEvents.length > 0 && (
+              <div className="rounded-lg border border-purple-200 bg-purple-50/50 p-3 text-xs space-y-1">
+                <p className="font-bold text-purple-900">Recorded Workflow Migration Events:</p>
+                {req.migrationEvents.map(evt => (
+                  <p key={evt.id} className="text-purple-800">
+                    • <strong>{evt.actorName} ({evt.actorRole})</strong> migrated workflow from v{evt.previousWorkflowVersion} to v{evt.newWorkflowVersion} on {new Date(evt.ts).toLocaleString()} — Reason: "{evt.reason}"
+                  </p>
+                ))}
+              </div>
+            )}
           </div>
 
-          {/* Approver Query Callout */}
-          {req.query && (
-            <div className="bg-orange-50 border border-orange-200 rounded-xl px-5 py-4 mb-4">
-              <div className="flex items-center gap-2 mb-1">
-                <span className="inline-block w-2 h-2 rounded-full bg-orange-500" />
-                <p className="text-xs font-bold text-orange-700 uppercase tracking-wider">
-                  CLARIFICATION QUERY
-                </p>
-              </div>
-              <p className="text-sm text-orange-900 font-medium">{req.query}</p>
-            </div>
-          )}
-
-          {/* Action Center with Strict Role-Stage Lock & Higher Authority Flag Decision Controls */}
+          {/* Action Center with Strict Role-Stage Lock & Post-Dean Branch Controls */}
           <div className="bg-white rounded-xl border border-slate-100 shadow-sm px-6 py-5 mb-4">
             <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-4">
               Action Center ({getRoleDisplayName(user.role)})
@@ -477,7 +409,7 @@ export const AllRequestsView: React.FC<AllRequestsViewProps> = ({
 
             {/* Success Message Banner */}
             {actionSuccessMsg && (
-              <div className="bg-green-50 border border-green-200 rounded-xl p-4 mb-4 flex items-center gap-3 text-green-800 animate-in fade-in">
+              <div className="bg-green-50 border border-green-200 rounded-xl p-4 mb-4 flex items-center gap-3 text-green-800">
                 <div className="w-8 h-8 rounded-full bg-green-100 flex items-center justify-center flex-shrink-0">
                   <Icon name="check" className="w-5 h-5 text-green-600" />
                 </div>
@@ -485,69 +417,13 @@ export const AllRequestsView: React.FC<AllRequestsViewProps> = ({
                   <p className="text-xs font-bold text-green-900 uppercase tracking-wide">
                     Action Completed Successfully!
                   </p>
-                  <p className="text-xs text-green-700 mt-0.5">
-                    {actionSuccessMsg}
-                  </p>
+                  <p className="text-xs text-green-700 mt-0.5">{actionSuccessMsg}</p>
                 </div>
               </div>
             )}
-
-            {/* HIGHER AUTHORITY FLAGGED DECISION CENTER (CEO / GM when request is flagged >6h) */}
-            {isHigherAuthority && req.businessHoursIdle >= 6 && req.status === 'PENDING' && (
-              <div className="space-y-4 bg-amber-50/50 p-4 rounded-xl border border-amber-200 mb-4">
-                <div>
-                  <p className="text-xs font-bold text-amber-900 uppercase tracking-wider">
-                    👑 Higher Authority Flagged Request Decision:
-                  </p>
-                  <p className="text-xs text-amber-700 mt-0.5">
-                    This request was flagged due to delay at <strong>{getRoleDisplayName(req.currentStage)}</strong>. As Higher Authority, you can decide whether to flag & push it to the next official, send a query, or grant direct clearance:
-                  </p>
-                </div>
-
-                <div className="flex gap-2.5 flex-wrap">
-                  {/* Option 1: Higher Authority decides to flag & move to next official */}
-                  <button
-                    onClick={() => {
-                      const next = getNextStage(req.category, req.currentStage);
-                      if (next === 'COMPLETED' || user.role === 'CEO') {
-                        onUpdateStatus(
-                          req.id,
-                          'APPROVED',
-                          `Executive Clearance granted by Higher Authority (${user.name})`,
-                          { currentStage: 'COMPLETED' }
-                        );
-                        setActionSuccessMsg('Executive clearance granted by Higher Authority.');
-                      } else {
-                        onAdvanceStage(
-                          req.id,
-                          next,
-                          `Flagged & Forwarded to next official (${getRoleDisplayName(next)}) by Higher Authority decision`
-                        );
-                        setActionSuccessMsg(`✓ Higher Authority decision: Flagged and forwarded to ${getRoleDisplayName(next)}.`);
-                      }
-                    }}
-                    className="flex items-center gap-1.5 bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold px-4 py-2 rounded-lg transition shadow-xs cursor-pointer"
-                  >
-                    🚩 Flag & Forward to Next Official ({getRoleDisplayName(getNextStage(req.category, req.currentStage))})
-                  </button>
-
-                  {/* Option 2: Higher Authority direct clearance */}
-                  <button
-                    onClick={() => {
-                      onUpdateStatus(
-                        req.id,
-                        'APPROVED',
-                        `Direct Approval granted by Higher Authority (${user.name})`,
-                        { currentStage: 'COMPLETED' }
-                      );
-                      setActionSuccessMsg('Direct executive approval granted.');
-                    }}
-                    className="flex items-center gap-1.5 bg-green-600 hover:bg-green-700 text-white text-xs font-bold px-4 py-2 rounded-lg transition shadow-xs cursor-pointer"
-                  >
-                    <Icon name="check" className="w-4 h-4" />
-                    Grant Direct Clearance
-                  </button>
-                </div>
+            {actionErrorMsg && (
+              <div role="alert" className="mb-4 border-l-4 border-red-600 bg-red-50 px-4 py-3 text-xs text-red-800">
+                {actionErrorMsg}
               </div>
             )}
 
@@ -560,39 +436,23 @@ export const AllRequestsView: React.FC<AllRequestsViewProps> = ({
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div>
-                    <label className="block text-xs font-semibold text-slate-600 uppercase mb-1">
-                      Revised Title
-                    </label>
+                    <label className="block text-xs font-semibold text-slate-600 uppercase mb-1">Revised Title</label>
                     <input
                       type="text"
                       value={revisedTitle}
                       onChange={e => setRevisedTitle(e.target.value)}
-                      className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-800"
                     />
                   </div>
                   <div>
-                    <label className="block text-xs font-semibold text-slate-600 uppercase mb-1">
-                      Revised Amount (INR)
-                    </label>
+                    <label className="block text-xs font-semibold text-slate-600 uppercase mb-1">Revised Amount (INR)</label>
                     <input
                       type="number"
                       value={revisedAmount}
                       onChange={e => setRevisedAmount(e.target.value)}
-                      className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-800"
                     />
                   </div>
-                </div>
-
-                <div>
-                  <label className="block text-xs font-semibold text-slate-600 uppercase mb-1">
-                    Revised Description
-                  </label>
-                  <textarea
-                    rows={2}
-                    value={revisedDescription}
-                    onChange={e => setRevisedDescription(e.target.value)}
-                    className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
-                  />
                 </div>
 
                 <div>
@@ -603,210 +463,104 @@ export const AllRequestsView: React.FC<AllRequestsViewProps> = ({
                     rows={3}
                     value={responseExplanation}
                     onChange={e => setResponseExplanation(e.target.value)}
-                    className="w-full border border-slate-200 rounded-lg px-3 py-2.5 text-sm text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
+                    className="w-full border border-slate-200 rounded-lg px-3 py-2.5 text-sm text-slate-800 resize-none"
                     placeholder="Provide your response or explanation regarding the query..."
                   />
                 </div>
 
                 <button
-                  onClick={() => {
-                    if (responseExplanation.trim()) {
-                      onUpdateStatus(
-                        req.id,
-                        'PENDING',
-                        `Requester revised request details`,
-                        {
-                          title: revisedTitle.trim() || req.title,
-                          amount: parseInt(revisedAmount, 10) || req.amount,
-                          description: revisedDescription.trim() || req.description,
-                          query: undefined
-                        }
-                      );
-                      setActionSuccessMsg('Your revised request and clarification were resubmitted back to the queue.');
-                      setResponseExplanation('');
-                    }
-                  }}
-                  disabled={!responseExplanation.trim()}
-                  className="bg-orange-500 hover:bg-orange-600 disabled:opacity-50 text-white text-xs font-semibold px-5 py-2.5 rounded-lg transition shadow-xs cursor-pointer"
+                  disabled={!responseExplanation.trim() || actionLoading}
+                  onClick={() => void runAction(async () => {
+                    await onUpdateStatus(req.id, 'PENDING', 'Requester revised request details', {
+                      title: revisedTitle.trim() || req.title,
+                      amount: parseInt(revisedAmount, 10) || req.amount,
+                      description: revisedDescription.trim() || req.description,
+                      queryResponse: responseExplanation.trim()
+                    });
+                    setResponseExplanation('');
+                  }, 'Your revision and query response were saved to the approval queue.')}
+                  className="bg-orange-500 hover:bg-orange-600 text-white text-xs font-semibold px-5 py-2.5 rounded-lg transition"
                 >
                   Submit Revision & Resubmit to Queue
                 </button>
               </div>
             )}
 
-            {/* MANAGER ACTION CENTER: Route to HR, IT, or Finance */}
-            {user.role === 'MANAGER' && req.currentStage === 'MANAGER' && req.status === 'PENDING' && (
-              <div className="space-y-4 bg-blue-50/40 p-4 rounded-xl border border-blue-100">
-                <div className="mb-2">
+            {/* POST-DEAN BRANCH SELECTION / ROUTING (Dean, Manager, Authority) */}
+            {canRouteBranch && (req.currentStage === 'DEAN' || req.currentStage === 'INSTITUTION_MANAGER' || req.currentStage === 'MANAGER') && (
+              <div className="space-y-4 bg-blue-50/40 p-4 rounded-xl border border-blue-100 mb-4">
+                <div>
                   <p className="text-xs font-bold text-slate-800 uppercase tracking-wider">
-                    👉 Manager Branch Routing Decision:
+                    👉 Post-Dean Branch Destination Selection:
                   </p>
                   <p className="text-xs text-slate-500 mt-0.5">
-                    Select which department branch to route this request to (HR, IT, or Finance Head):
+                    Select which post-Dean branch destination will process this request before continuing to CEO and Chairman:
                   </p>
                 </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
-                  <button
-                    type="button"
-                    onClick={() => setSelectedBranch('HR')}
-                    className={`p-3 rounded-lg border text-left transition cursor-pointer ${
-                      selectedBranch === 'HR'
-                        ? 'bg-pink-50 border-pink-500 text-pink-900 ring-2 ring-pink-400/30'
-                        : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50'
-                    }`}
-                  >
-                    <p className="text-xs font-bold">🏢 HR Department</p>
-                    <p className="text-[10px] text-slate-500 mt-0.5">Routes to HR Head</p>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => setSelectedBranch('IT')}
-                    className={`p-3 rounded-lg border text-left transition cursor-pointer ${
-                      selectedBranch === 'IT'
-                        ? 'bg-blue-50 border-blue-500 text-blue-900 ring-2 ring-blue-400/30'
-                        : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50'
-                    }`}
-                  >
-                    <p className="text-xs font-bold">💻 IT Department</p>
-                    <p className="text-[10px] text-slate-500 mt-0.5">Routes to IT Head</p>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => setSelectedBranch('FINANCE')}
-                    className={`p-3 rounded-lg border text-left transition cursor-pointer ${
-                      selectedBranch === 'FINANCE'
-                        ? 'bg-yellow-50 border-yellow-500 text-yellow-900 ring-2 ring-yellow-400/30'
-                        : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50'
-                    }`}
-                  >
-                    <p className="text-xs font-bold">💰 Finance Directorate</p>
-                    <p className="text-[10px] text-slate-500 mt-0.5">Routes to Finance Head first</p>
-                  </button>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+                  {POST_DEAN_BRANCHES.map(br => {
+                    const isSelected = selectedBranch === br;
+                    return (
+                      <button
+                        key={br}
+                        type="button"
+                        onClick={() => setSelectedBranch(br)}
+                        className={`p-3 rounded-lg border text-left transition ${
+                          isSelected
+                            ? 'bg-blue-50 border-blue-600 text-blue-900 ring-2 ring-blue-400/30 font-bold'
+                            : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50'
+                        }`}
+                      >
+                        <p className="text-xs font-bold">{br} Branch</p>
+                        <p className="text-[10px] text-slate-500 mt-0.5">Routes to {br} Head</p>
+                      </button>
+                    );
+                  })}
                 </div>
 
                 <div className="flex gap-3 pt-2">
                   <button
-                    onClick={() => {
-                      const nextStage: ApprovalStage = selectedBranch === 'HR'
-                        ? 'HR'
-                        : selectedBranch === 'IT'
-                        ? 'IT'
-                        : 'FINANCE';
-
-                      const targetName = selectedBranch === 'HR'
-                        ? 'HR Head'
-                        : selectedBranch === 'IT'
-                        ? 'IT Head'
-                        : 'Finance Head';
-
-                      onAdvanceStage(
-                        req.id,
-                        nextStage,
-                        `Manager verified request and routed to ${targetName}`
-                      );
-                      setActionSuccessMsg(`✓ Request successfully approved and routed to ${targetName}! It is now in their queue.`);
-                    }}
-                    className="flex items-center gap-2 bg-green-600 hover:bg-green-700 text-white text-xs font-semibold px-5 py-2.5 rounded-lg transition shadow-xs cursor-pointer"
+                    disabled={actionLoading}
+                    onClick={() => void runAction(async () => {
+                      await onRouteToBranch(req.id, selectedBranch);
+                    }, `Request routed to ${selectedBranch} Branch.`)}
+                    className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold px-5 py-2.5 rounded-lg transition shadow-xs"
                   >
                     <Icon name="check" className="w-4 h-4" />
-                    Approve & Route to {selectedBranch === 'FINANCE' ? 'Finance Head' : selectedBranch}
-                  </button>
-
-                  <button
-                    onClick={() => {
-                      onUpdateStatus(
-                        req.id,
-                        'REJECTED',
-                        `Request rejected by Line Manager`
-                      );
-                      setActionSuccessMsg('Request was rejected.');
-                    }}
-                    className="flex items-center gap-2 bg-red-500 hover:bg-red-600 text-white text-xs font-semibold px-4 py-2.5 rounded-lg transition shadow-xs cursor-pointer"
-                  >
-                    <Icon name="x" className="w-4 h-4" />
-                    Reject
-                  </button>
-                </div>
-
-                {/* Manager Query Form */}
-                <div className="space-y-2 pt-2 border-t border-slate-100">
-                  <p className="text-xs font-semibold text-slate-700">
-                    Request Clarification from Requester
-                  </p>
-                  <textarea
-                    rows={2}
-                    value={queryText}
-                    onChange={e => setQueryText(e.target.value)}
-                    className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-orange-400 resize-none bg-white"
-                    placeholder="Ask requester for details before routing..."
-                  />
-                  <button
-                    onClick={() => {
-                      if (queryText.trim()) {
-                        onUpdateStatus(
-                          req.id,
-                          'QUERIED',
-                          `Clarification query initiated`,
-                          { query: queryText.trim() }
-                        );
-                        setActionSuccessMsg('Query sent to requester.');
-                        setQueryText('');
-                      }
-                    }}
-                    className="bg-orange-500 hover:bg-orange-600 text-white text-xs font-semibold px-4 py-2 rounded-lg transition cursor-pointer"
-                  >
-                    Send Query
+                    Confirm & Route to {selectedBranch} Branch
                   </button>
                 </div>
               </div>
             )}
 
-            {/* OTHER APPROVERS (FINANCE, ACCOUNTANT, HR, IT, GM, CEO) */}
-            {isMyTurnToApprove && user.role !== 'MANAGER' && (
+            {/* REGULAR APPROVAL BUTTONS */}
+            {(isMyTurnToApprove || canReviewEscalated || canReviewDelayed || canReviewCeoStep) && (
               <div className="space-y-4">
                 <div className="flex gap-3 flex-wrap">
-                  {/* Approve & Advance Button */}
                   <button
-                    onClick={() => {
-                      const next = getNextStage(req.category, req.currentStage);
-                      if (next === 'COMPLETED' || user.role === 'CEO') {
-                        onUpdateStatus(
-                          req.id,
-                          'APPROVED',
-                          `Final approval granted by ${user.name} (${getRoleDisplayName(user.role)})`,
-                          { currentStage: 'COMPLETED' }
-                        );
-                        setActionSuccessMsg(`✓ Final Approval granted by CEO! Request is completed.`);
-                      } else {
-                        onAdvanceStage(
-                          req.id,
-                          next,
-                          `Approved by ${user.name} (${getRoleDisplayName(user.role)}) → Forwarded to ${getRoleDisplayName(next)}`
-                        );
-                        setActionSuccessMsg(`✓ Request approved and successfully forwarded to ${getRoleDisplayName(next)}!`);
-                      }
-                    }}
-                    className="flex items-center gap-2 bg-green-600 hover:bg-green-700 text-white text-xs font-semibold px-4 py-2.5 rounded-lg transition shadow-xs cursor-pointer"
+                    disabled={actionLoading}
+                    onClick={() => void runAction(async () => {
+                      await onApproveStep(req.id, !isMyTurnToApprove);
+                    }, canReviewEscalated || user.role === 'CHAIRMAN' || !getNextWorkflowRole(req)
+                      ? 'Final approval granted. Request is completed.'
+                      : `Request approved and forwarded to ${getRoleDisplayName(getNextWorkflowRole(req) || '')}.`)}
+                    className="flex items-center gap-2 bg-green-600 hover:bg-green-700 text-white text-xs font-semibold px-4 py-2.5 rounded-lg transition shadow-xs"
                   >
                     <Icon name="check" className="w-4 h-4" />
-                    {user.role === 'CEO' || getNextStage(req.category, req.currentStage) === 'COMPLETED'
+                    {user.role === 'CHAIRMAN' || canReviewEscalated || !getNextWorkflowRole(req)
                       ? 'Grant Final Approval'
-                      : `Approve & Forward to ${getRoleDisplayName(getNextStage(req.category, req.currentStage))}`}
+                      : `Approve & Forward to ${getRoleDisplayName(getNextWorkflowRole(req) || '')}`}
                   </button>
 
                   <button
-                    onClick={() => {
-                      onUpdateStatus(
-                        req.id,
-                        'REJECTED',
-                        `Request rejected by ${user.name} (${getRoleDisplayName(user.role)})`
-                      );
-                      setActionSuccessMsg(`Request was rejected.`);
-                    }}
-                    className="flex items-center gap-2 bg-red-500 hover:bg-red-600 text-white text-xs font-semibold px-4 py-2.5 rounded-lg transition shadow-xs cursor-pointer"
+                    disabled={actionLoading}
+                    onClick={() => void runAction(() => onUpdateStatus(
+                      req.id,
+                      'REJECTED',
+                      `Request rejected by ${user.name} (${getRoleDisplayName(user.role)})`
+                    ), 'Request was rejected.')}
+                    className="flex items-center gap-2 bg-red-500 hover:bg-red-600 text-white text-xs font-semibold px-4 py-2.5 rounded-lg transition shadow-xs"
                   >
                     <Icon name="x" className="w-4 h-4" />
                     Reject
@@ -822,23 +576,20 @@ export const AllRequestsView: React.FC<AllRequestsViewProps> = ({
                     rows={2}
                     value={queryText}
                     onChange={e => setQueryText(e.target.value)}
-                    className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-orange-400 resize-none"
-                    placeholder="Ask for clarification..."
+                    className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-800 placeholder-slate-400 resize-none"
+                    placeholder="Ask for clarification from requester..."
                   />
                   <button
-                    onClick={() => {
-                      if (queryText.trim()) {
-                        onUpdateStatus(
-                          req.id,
-                          'QUERIED',
-                          `Clarification query initiated`,
-                          { query: queryText.trim() }
-                        );
-                        setActionSuccessMsg('Query sent.');
-                        setQueryText('');
-                      }
-                    }}
-                    className="bg-orange-500 hover:bg-orange-600 text-white text-xs font-semibold px-4 py-2 rounded-lg transition cursor-pointer"
+                    disabled={!queryText.trim() || actionLoading}
+                    onClick={() => void runAction(async () => {
+                      await onUpdateStatus(req.id, 'QUERIED', 'Clarification query initiated', {
+                        query: queryText.trim(),
+                        queryRaisedByUserId: user.id || user.email,
+                        queryRaisedByName: user.name
+                      });
+                      setQueryText('');
+                    }, 'Query sent to the requester.')}
+                    className="bg-orange-500 hover:bg-orange-600 text-white text-xs font-semibold px-4 py-2 rounded-lg transition"
                   >
                     Send Query
                   </button>
@@ -846,8 +597,7 @@ export const AllRequestsView: React.FC<AllRequestsViewProps> = ({
               </div>
             )}
 
-            {/* Informative message when viewing request currently at another role's stage */}
-            {!isMyTurnToApprove && !actionSuccessMsg && req.status === 'PENDING' && (
+            {!isMyTurnToApprove && !actionSuccessMsg && req.status === 'PENDING' && !canRouteBranch && (
               <div className="bg-indigo-50/70 border border-indigo-100 rounded-lg p-3 text-xs text-indigo-900 flex items-center gap-2">
                 <span className="text-base">📍</span>
                 <span>
@@ -855,126 +605,182 @@ export const AllRequestsView: React.FC<AllRequestsViewProps> = ({
                 </span>
               </div>
             )}
+          </div>
 
-            {(req.status === 'APPROVED' || req.status === 'REJECTED') && (
-              <div
-                className={`rounded-lg px-4 py-3 text-xs font-medium ${
-                  req.status === 'APPROVED'
-                    ? 'bg-green-50 text-green-700'
-                    : 'bg-red-50 text-red-700'
-                }`}
-              >
-                ✓ This request is <strong>{req.status.toLowerCase()}</strong> and closed. No further action required.
+          {/* Request Details & Description Card */}
+          <div className="bg-white rounded-xl border border-slate-100 shadow-sm p-6 mb-4 space-y-4">
+            <h3 className="text-sm font-bold text-slate-900 uppercase tracking-wider">Request Details</h3>
+            <p className="text-sm text-slate-700 leading-relaxed whitespace-pre-line">{req.description}</p>
+            {req.purpose && req.purpose !== req.description && (
+              <div>
+                <p className="text-xs font-semibold text-slate-500 uppercase">Purpose / Objective</p>
+                <p className="text-sm text-slate-700 mt-0.5">{req.purpose}</p>
               </div>
             )}
           </div>
 
-          {/* Audit Trail (Clean Public Audit Trail with Higher Role Queries Hidden) */}
-          <div className="bg-white rounded-xl border border-slate-100 shadow-sm px-6 py-5">
-            <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-4">
-              Procedural Approval Audit Trail
-            </p>
-            <div className="space-y-4 relative before:absolute before:left-2 before:top-2 before:bottom-2 before:w-px before:bg-slate-100">
-              {publicAuditTrail.map((entry, i) => (
-                <div key={i} className="flex gap-4 pl-6 relative">
-                  <span className="absolute left-0 top-1.5 w-[9px] h-[9px] rounded-full bg-blue-500 border-2 border-white ring-1 ring-blue-200" />
-                  <div>
-                    <p className="text-xs font-medium text-slate-800">{entry.action}</p>
-                    <p className="text-[11px] text-slate-400 mt-0.5">
-                      {entry.ts} · <span className="text-blue-600 font-semibold">{entry.actor}</span>
-                    </p>
+          {/* Attachments */}
+          {req.attachments && req.attachments.length > 0 && (
+            <div className="bg-white rounded-xl border border-slate-100 shadow-sm p-6 mb-4 space-y-3">
+              <h3 className="text-sm font-bold text-slate-900 uppercase tracking-wider">Attachments ({req.attachments.length})</h3>
+              <div className="grid gap-2 sm:grid-cols-2">
+                {req.attachments.map((att, idx) => (
+                  <div key={idx} className="flex items-center justify-between p-3 rounded-lg border border-slate-200 bg-slate-50 text-xs">
+                    <div>
+                      <p className="font-semibold text-slate-800">{att.name}</p>
+                      <p className="text-slate-400">{att.size} · {att.type}</p>
+                    </div>
+                    {att.dataUrl && (
+                      <button
+                        type="button"
+                        onClick={() => setViewingDocument(att)}
+                        className="text-blue-600 hover:text-blue-800 font-bold"
+                      >
+                        Preview
+                      </button>
+                    )}
                   </div>
-                </div>
-              ))}
-              {publicAuditTrail.length === 0 && (
-                <p className="text-xs text-slate-400 italic pl-6">No procedural audit records yet.</p>
-              )}
+                ))}
+              </div>
             </div>
+          )}
+
+          {/* Full Audit Trail */}
+          <div className="bg-white rounded-xl border border-slate-100 shadow-sm p-6 space-y-3">
+            <h3 className="text-sm font-bold text-slate-900 uppercase tracking-wider">Audit Log & Event Trail</h3>
+            <ol className="relative border-l border-slate-200 pl-4 space-y-3 text-xs">
+              {publicAuditTrail.map((entry, idx) => (
+                <li key={idx} className="space-y-0.5">
+                  <div className="flex items-center gap-2">
+                    <span className="font-bold text-slate-800">{entry.actor}</span>
+                    <span className="text-slate-400">{new Date(entry.ts).toLocaleString()}</span>
+                  </div>
+                  <p className="text-slate-600">{entry.action}</p>
+                </li>
+              ))}
+            </ol>
           </div>
         </div>
       ) : (
-        <div className="flex-1 hidden md:flex items-center justify-center text-slate-400 flex-col gap-3">
-          <Icon name="requests" className="w-12 h-12 text-slate-200" />
-          <p className="text-sm">Select a request from the queue to review and track stages</p>
+        <div className="hidden md:flex flex-1 items-center justify-center text-slate-400 text-sm">
+          Select a request from the list to view its complete workflow details.
         </div>
       )}
 
-      {/* DOCUMENT PREVIEW MODAL */}
-      {viewingDocument && (
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-2xs z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[85vh] flex flex-col overflow-hidden border border-slate-200">
-            <div className="bg-slate-800 text-white px-5 py-3 flex items-center justify-between flex-shrink-0">
-              <div className="flex items-center gap-2.5">
-                <div className="w-7 h-7 rounded bg-blue-600 flex items-center justify-center text-xs font-bold tracking-wider">
-                  DOC
-                </div>
-                <div>
-                  <p className="text-xs font-semibold text-slate-100">{viewingDocument.name}</p>
-                  <p className="text-[10px] text-slate-400">{viewingDocument.size} · Official Company Attachment</p>
-                </div>
+      {/* CEO Workflow Migration Modal (PART E & F) */}
+      {migrationModalOpen && req && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4">
+          <div className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-2xl space-y-4">
+            <div className="flex items-start justify-between border-b border-slate-100 pb-3">
+              <div>
+                <h3 className="text-lg font-bold text-slate-900">Migrate Request Workflow</h3>
+                <p className="text-xs text-slate-500">
+                  Update remaining processing stages for Request <strong>{req.id}</strong> without altering historical approvals.
+                </p>
               </div>
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={() => window.print()}
-                  className="bg-slate-700 hover:bg-slate-600 text-slate-200 text-xs px-3 py-1.5 rounded-md flex items-center gap-1 transition cursor-pointer"
-                >
-                  Print / Download
-                </button>
-                <button
-                  onClick={() => setViewingDocument(null)}
-                  className="bg-slate-700 hover:bg-red-600 text-slate-200 hover:text-white p-1.5 rounded-md transition cursor-pointer"
-                >
-                  <Icon name="x" className="w-4 h-4" />
-                </button>
-              </div>
-            </div>
-
-            <div className="flex-1 overflow-y-auto bg-slate-100 p-6 flex justify-center">
-              <div className="bg-white border border-slate-200 shadow-md rounded-lg w-full p-8 text-slate-800 font-sans">
-                <div className="border-b-2 border-blue-600 pb-4 mb-5 flex items-start justify-between">
-                  <div>
-                    <h3 className="text-base font-bold text-slate-900 uppercase">
-                      SMART APPROVAL SYSTEM — SUPPORTING PROOF
-                    </h3>
-                    <p className="text-xs text-blue-600 font-semibold mt-0.5">
-                      Verified Attachment for Multi-Tier Approval Review
-                    </p>
-                  </div>
-                  <div className="text-right text-xs">
-                    <span className="bg-green-50 text-green-700 border border-green-200 font-semibold px-2 py-0.5 rounded text-[11px]">
-                      ✓ Security Scanned
-                    </span>
-                  </div>
-                </div>
-
-                <div className="space-y-4 text-xs leading-relaxed text-slate-700">
-                  <div className="bg-slate-50 border border-slate-200 rounded-lg p-3.5">
-                    <p className="font-semibold text-slate-800 mb-1">Document Metadata:</p>
-                    <p className="text-slate-600"><strong>File Name:</strong> {viewingDocument.name}</p>
-                    <p className="text-slate-600"><strong>File Size:</strong> {viewingDocument.size}</p>
-                    <p className="text-slate-600"><strong>Format:</strong> {viewingDocument.type} Document</p>
-                  </div>
-
-                  <div className="border border-slate-100 rounded-lg p-4 bg-white text-center py-10">
-                    <div className="w-12 h-12 rounded-full bg-blue-50 text-blue-600 flex items-center justify-center mx-auto mb-3">
-                      <Icon name="requests" className="w-6 h-6" />
-                    </div>
-                    <p className="font-semibold text-slate-800 text-sm">{viewingDocument.name}</p>
-                    <p className="text-slate-500 text-xs mt-1 max-w-sm mx-auto">
-                      Contains itemized vendor quotes, budgetary breakdown, and technical requisitions for review by Manager, Finance Head, Accountant, GM, and CEO.
-                    </p>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <div className="bg-slate-50 border-t border-slate-200 px-5 py-3 flex items-center justify-end">
               <button
-                onClick={() => setViewingDocument(null)}
-                className="bg-slate-200 hover:bg-slate-300 text-slate-700 text-xs font-semibold px-4 py-2 rounded-lg transition cursor-pointer"
+                type="button"
+                onClick={() => setMigrationModalOpen(false)}
+                className="text-slate-400 hover:text-slate-600 text-lg font-bold"
               >
-                Close Preview
+                ✕
               </button>
+            </div>
+
+            <form onSubmit={handleMigrationSubmit} className="space-y-4">
+              <div className="rounded-lg bg-slate-50 p-3 text-xs space-y-1.5 border border-slate-200">
+                <p className="font-semibold text-slate-800">Migration Safety Rules:</p>
+                <p className="text-slate-600">• Completed stages up to current position remain permanently completed.</p>
+                <p className="text-slate-600">• Current pending stage (<strong>{getRoleDisplayName(req.currentStage)}</strong>) will be marked as SUPERSEDED (not approved).</p>
+                <p className="text-slate-600">• The selected replacement role will become the new active pending stage.</p>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold uppercase text-slate-600 mb-1">
+                  Replacement / Next Approval Role <span className="text-red-500">*</span>
+                </label>
+                <select
+                  value={migrationRole}
+                  onChange={e => setMigrationRole(e.target.value)}
+                  className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900"
+                >
+                  <option value="GENERAL_MANAGER">General Manager (GENERAL_MANAGER)</option>
+                  {STANDARD_ROLES.filter(r => r.name !== 'REQUESTER' && r.name !== 'CHAIRMAN').map(r => (
+                    <option key={r.name} value={r.name}>
+                      {r.displayName} ({r.name})
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold uppercase text-slate-600 mb-1">
+                  Administrative Reason / Justification <span className="text-red-500">*</span>
+                </label>
+                <textarea
+                  rows={3}
+                  required
+                  value={migrationReason}
+                  onChange={e => setMigrationReason(e.target.value)}
+                  placeholder="e.g. Accountant role superseded by new corporate workflow v2; transitioning pending stage to General Manager."
+                  className="w-full rounded-md border border-slate-300 p-2.5 text-xs text-slate-900 resize-none focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+
+              <label className="flex items-start gap-2 text-xs text-slate-700 cursor-pointer">
+                <input
+                  type="checkbox"
+                  required
+                  checked={migrationConfirmed}
+                  onChange={e => setMigrationConfirmed(e.target.checked)}
+                  className="mt-0.5 h-4 w-4 rounded border-slate-300 text-blue-600"
+                />
+                <span>
+                  I confirm that I am authorized as CEO/Chairman to reassign this request's pending workflow and record this transition in the audit history.
+                </span>
+              </label>
+
+              <div className="flex justify-end gap-3 pt-2 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setMigrationModalOpen(false)}
+                  className="rounded-lg border border-slate-300 px-4 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={!migrationReason.trim() || !migrationConfirmed || actionLoading}
+                  className="rounded-lg bg-indigo-600 px-4 py-2 text-xs font-semibold text-white hover:bg-indigo-700 disabled:opacity-50"
+                >
+                  {actionLoading ? 'Migrating…' : 'Execute Workflow Migration'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Document Preview Modal */}
+      {viewingDocument && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-4">
+          <div className="w-full max-w-2xl rounded-2xl bg-white p-6 shadow-2xl space-y-4">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <h3 className="font-bold text-sm text-slate-900">{viewingDocument.name}</h3>
+              <button
+                type="button"
+                onClick={() => setViewingDocument(null)}
+                className="text-slate-400 hover:text-slate-600 text-sm font-bold"
+              >
+                ✕ Close
+              </button>
+            </div>
+            <div className="max-h-96 overflow-y-auto">
+              {viewingDocument.dataUrl?.startsWith('data:image/') ? (
+                <img src={viewingDocument.dataUrl} alt={viewingDocument.name} className="max-w-full rounded" />
+              ) : (
+                <p className="text-xs text-slate-600 whitespace-pre-wrap">{viewingDocument.dataUrl}</p>
+              )}
             </div>
           </div>
         </div>

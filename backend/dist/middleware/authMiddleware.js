@@ -1,46 +1,80 @@
 "use strict";
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.requireCEO = exports.authenticateJWT = void 0;
-const jsonwebtoken_1 = __importDefault(require("jsonwebtoken"));
+exports.enforceCsrfOrigin = exports.requireChairman = exports.requireCEO = exports.requireRole = exports.authenticateJWT = exports.asyncHandler = void 0;
 const db_1 = require("../services/db");
-const JWT_SECRET = process.env.JWT_SECRET || 'northstar_workflow_secret_2026';
-const authenticateJWT = (req, res, next) => {
-    const authHeader = req.headers.authorization;
-    if (authHeader) {
-        const token = authHeader.split(' ')[1];
-        jsonwebtoken_1.default.verify(token, JWT_SECRET, (err, decoded) => {
-            if (err) {
-                return res.status(403).json({ success: false, message: 'Invalid or expired token' });
+const auth_1 = require("../services/auth");
+const asyncHandler = (handler) => (req, res, next) => {
+    void handler(req, res, next).catch(next);
+};
+exports.asyncHandler = asyncHandler;
+const allowedOrigins = () => new Set([
+    ...(process.env.FRONTEND_ORIGIN || '').split(',').map(origin => origin.trim()).filter(Boolean),
+    'http://localhost:3000',
+    'http://127.0.0.1:3000',
+    'http://localhost:5000',
+    'http://127.0.0.1:5000',
+    'http://localhost:5173',
+    'http://127.0.0.1:5173'
+]);
+const authenticateJWT = async (req, res, next) => {
+    const authHeader = req.get('authorization');
+    const bearerToken = authHeader?.startsWith('Bearer ') ? authHeader.slice(7).trim() : undefined;
+    const token = req.cookies?.flownexus_session || bearerToken;
+    if (!token)
+        return res.status(401).json({ success: false, message: 'Authentication required' });
+    try {
+        const claims = (0, auth_1.verifySessionToken)(token);
+        const user = await db_1.prisma.user.findFirst({
+            where: {
+                id: claims.sub,
+                email: claims.email,
+                isActive: true
+            },
+            select: {
+                id: true,
+                email: true,
+                name: true,
+                role: true,
+                dept: true,
+                company: true,
+                businessUnit: true,
+                campus: true,
+                institution: true,
+                phone: true,
+                employeeId: true,
+                isActive: true
             }
-            const user = db_1.db.users.find(u => u.id === decoded.id || u.email === decoded.email);
-            if (!user) {
-                return res.status(404).json({ success: false, message: 'User not found' });
-            }
-            req.user = user;
-            next();
         });
+        if (!user)
+            return res.status(401).json({ success: false, message: 'Session user is no longer active' });
+        req.user = user;
+        return next();
     }
-    else {
-        // If no header, allow demo fallback header x-user-email for fast testing
-        const demoEmail = req.headers['x-user-email'];
-        if (demoEmail) {
-            const user = db_1.db.users.find(u => u.email === demoEmail);
-            if (user) {
-                req.user = user;
-                return next();
-            }
-        }
-        res.status(401).json({ success: false, message: 'Authentication required' });
+    catch {
+        return res.status(401).json({ success: false, message: 'Invalid or expired session' });
     }
 };
 exports.authenticateJWT = authenticateJWT;
-const requireCEO = (req, res, next) => {
-    if (req.user?.role !== 'CEO') {
-        return res.status(403).json({ success: false, message: 'Only the CEO can manage users, roles, and reassignment.' });
+const requireRole = (...roles) => (req, res, next) => {
+    if (!req.user || !roles.includes(req.user.role)) {
+        return res.status(403).json({ success: false, message: 'You are not authorized to perform this action' });
     }
-    next();
+    return next();
 };
-exports.requireCEO = requireCEO;
+exports.requireRole = requireRole;
+exports.requireCEO = (0, exports.requireRole)('CEO', 'CHAIRMAN');
+exports.requireChairman = (0, exports.requireRole)('CHAIRMAN');
+const enforceCsrfOrigin = (req, res, next) => {
+    if (['GET', 'HEAD', 'OPTIONS'].includes(req.method))
+        return next();
+    const origin = req.get('origin') || req.get('referer');
+    if (origin) {
+        const originUrl = origin.replace(/\/$/, '');
+        const isAllowed = Array.from(allowedOrigins()).some(allowed => originUrl.startsWith(allowed.replace(/\/$/, '')));
+        if (!isAllowed) {
+            return res.status(403).json({ success: false, message: 'Request origin is not allowed' });
+        }
+    }
+    return next();
+};
+exports.enforceCsrfOrigin = enforceCsrfOrigin;

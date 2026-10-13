@@ -1,5 +1,6 @@
 import React from 'react';
 import { User, ApprovalRequest, RequestStatus } from '../services/types';
+import { canViewActiveQuery } from '../services/api';
 
 interface CompletionStatusViewProps {
   user: User;
@@ -10,11 +11,12 @@ export const CompletionStatusView: React.FC<CompletionStatusViewProps> = ({
   user,
   requests
 }) => {
-  const visibleRequests = user.role === 'REQUESTER'
-    ? requests.filter(r => r.requester === user.name)
-    : user.role === 'CEO'
-    ? requests
-    : requests.filter(r => r.currentStage === user.role || r.status === 'APPROVED');
+  const visibleRequests = requests.filter(request =>
+    canViewActiveQuery(request, user) &&
+    (user.role === 'REQUESTER'
+      ? (request.requesterId ? request.requesterId === user.id : request.requester === user.name)
+      : user.role === 'CEO' || user.role === 'CHAIRMAN' || request.currentStage === user.role || request.status === 'APPROVED')
+  );
 
   const total = visibleRequests.length;
   const approved = visibleRequests.filter(r => r.status === 'APPROVED').length;
@@ -28,7 +30,7 @@ export const CompletionStatusView: React.FC<CompletionStatusViewProps> = ({
   const statusList: RequestStatus[] = ['APPROVED', 'PENDING', 'QUERIED', 'REJECTED', 'ESCALATED'];
 
   return (
-    <div className="px-6 py-6 max-w-4xl">
+    <div className="w-full px-6 py-6">
       <div className="mb-6">
         <h1 className="text-2xl font-bold text-slate-900 mb-1">Completion Status</h1>
         <p className="text-sm text-slate-400">
@@ -85,7 +87,8 @@ export const CompletionStatusView: React.FC<CompletionStatusViewProps> = ({
             PENDING: 'bg-yellow-400',
             QUERIED: 'bg-orange-400',
             REJECTED: 'bg-red-500',
-            ESCALATED: 'bg-purple-500'
+            ESCALATED: 'bg-purple-500',
+            COMPLETED: 'bg-emerald-500'
           };
 
           return (

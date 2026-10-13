@@ -1,16 +1,38 @@
 version: '3.8'
 
 services:
+  mysql:
+    image: mysql:8.0
+    restart: always
+    environment:
+      MYSQL_ROOT_PASSWORD: password
+      MYSQL_DATABASE: flownexus
+    ports:
+      - "3306:3306"
+    volumes:
+      - flownexus-mysql:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-ppassword"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
   backend:
     build:
       context: ./backend
       dockerfile: Dockerfile
     ports:
       - "5000:5000"
+    env_file:
+      - ./backend/.env
     environment:
       - PORT=5000
-      - JWT_SECRET=northstar_workflow_secret_2026
+      - DATABASE_URL=mysql://root:password@mysql:3306/flownexus
+      - FRONTEND_ORIGIN=http://localhost:3000
       - NODE_ENV=production
+    depends_on:
+      mysql:
+        condition: service_healthy
 
   frontend:
     build:
@@ -20,3 +42,6 @@ services:
       - "3000:80"
     depends_on:
       - backend
+
+volumes:
+  flownexus-mysql:

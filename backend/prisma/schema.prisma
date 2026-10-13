@@ -1,0 +1,274 @@
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model User {
+  id           String   @id
+  email        String   @unique
+  passwordHash String   @db.VarChar(255)
+  name         String
+  role         String
+  dept         String
+  company      String   @default("FlowNexus")
+  businessUnit String   @default("Main")
+  campus       String?
+  institution  String?
+  phone        String?
+  employeeId   String?
+  isActive     Boolean  @default(true)
+  createdAt    String
+  updatedAt    String
+
+  @@index([role])
+  @@index([isActive])
+  @@map("users")
+}
+
+model Role {
+  name              String   @id
+  displayName       String
+  canCreateRequests Boolean  @default(false)
+  systemRole        Boolean  @default(false)
+  createdBy         String   @default("system")
+  createdAt         String
+  updatedAt         String
+
+  @@map("roles")
+}
+
+model WorkflowDefinition {
+  id             String            @id
+  name           String
+  active         Boolean           @default(true)
+  currentVersion Int               @default(1)
+  createdAt      String
+  updatedAt      String
+  versions       WorkflowVersion[]
+
+  @@map("workflow_definitions")
+}
+
+model WorkflowVersion {
+  id           String                 @id
+  workflowId   String
+  version      Int
+  name         String
+  description  String?                @db.Text
+  isPublished  Boolean                @default(true)
+  publishedAt  String
+  publishedBy  String
+  stagesJson   String                 @db.LongText
+  workflow     WorkflowDefinition     @relation(fields: [workflowId], references: [id], onDelete: Cascade)
+  stages       WorkflowStage[]
+  branches     WorkflowBranchConfig[]
+  requests     ApprovalRequest[]
+
+  @@unique([workflowId, version])
+  @@index([workflowId])
+  @@map("workflow_versions")
+}
+
+model WorkflowStage {
+  id                String          @id
+  workflowVersionId String
+  stageKey          String
+  role              String
+  label             String
+  stageOrder        Int
+  stageType         String          @default("PRE_DEAN")
+  isApplicable      Boolean         @default(true)
+  isActive          Boolean         @default(true)
+  workflowVersion   WorkflowVersion @relation(fields: [workflowVersionId], references: [id], onDelete: Cascade)
+
+  @@index([workflowVersionId, stageOrder])
+  @@map("workflow_stages")
+}
+
+model WorkflowBranchConfig {
+  id                String          @id
+  workflowVersionId String
+  branchKey         String
+  displayName       String
+  role              String
+  isActive          Boolean         @default(true)
+  stageOrder        Int             @default(1)
+  workflowVersion   WorkflowVersion @relation(fields: [workflowVersionId], references: [id], onDelete: Cascade)
+
+  @@unique([workflowVersionId, branchKey])
+  @@index([workflowVersionId])
+  @@map("workflow_branch_configs")
+}
+
+model ApprovalRequest {
+  id                    String                   @id
+  title                 String
+  department            String
+  amount                Decimal                  @db.Decimal(15, 2)
+  date                  String
+  status                String
+  category              String
+  requestType           String?
+  requester             String
+  requesterId           String?
+  requesterEmail        String?
+  description           String                   @db.Text
+  purpose               String?                  @db.Text
+  requestDetailsJson    String?                  @db.LongText
+  company               String?
+  businessUnit          String?
+  campus                String?
+  institution           String?
+  hoursIdle             Float                    @default(0)
+  currentStage          String
+  currentStepIndex      Int                      @default(0)
+  assignedRole          String?
+  assignedUserId        String?
+  selectedBranch        String?
+  workflowVersionId     String?
+  workflowVersionNumber Int                      @default(1)
+  workflowSnapshotJson  String?                  @db.LongText
+  auditTrailJson        String?                  @db.LongText
+  stagesJson            String?                  @db.LongText
+  query                 String?                  @db.Text
+  queryRaisedByUserId   String?
+  queryRaisedByName     String?
+  flagged               Boolean                  @default(false)
+  flaggedAt             String?
+  createdAt             String
+  updatedAt             String
+  workflowVersion       WorkflowVersion?         @relation(fields: [workflowVersionId], references: [id], onDelete: SetNull)
+  attachments           RequestAttachment[]
+  queryThread           QueryMessage[]
+  approvalHistory       ApprovalDecision[]
+  stages                RequestStageInstance[]
+  migrationEvents       WorkflowMigrationEvent[]
+
+  @@index([status])
+  @@index([currentStage])
+  @@index([requesterId])
+  @@index([requesterEmail])
+  @@index([assignedUserId])
+  @@index([assignedRole])
+  @@index([workflowVersionId])
+  @@map("approval_requests")
+}
+
+model RequestStageInstance {
+  id              String          @id
+  requestId       String
+  stageIndex      Int
+  stageKey        String
+  role            String
+  label           String
+  status          String
+  isApplicable    Boolean         @default(true)
+  decidedByUserId String?
+  decidedByName   String?
+  decidedByRole   String?
+  decisionAction  String?
+  decisionTs      String?
+  notes           String?         @db.Text
+  request         ApprovalRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+
+  @@index([requestId, stageIndex])
+  @@map("request_stage_instances")
+}
+
+model ApprovalDecision {
+  id        String          @id
+  requestId String
+  stepIndex Int
+  role      String
+  actorId   String?
+  actorName String
+  actorRole String
+  action    String
+  notes     String?         @db.Text
+  ts        String
+  request   ApprovalRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+
+  @@index([requestId, stepIndex])
+  @@map("approval_decisions")
+}
+
+model WorkflowMigrationEvent {
+  id                      String          @id
+  requestId               String
+  actorId                 String
+  actorName               String
+  actorRole               String
+  reason                  String          @db.Text
+  previousWorkflowVersion Int
+  newWorkflowVersion      Int
+  oldStage                String?
+  newStage                String?
+  affectedStagesJson      String?         @db.LongText
+  ts                      String
+  request                 ApprovalRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+
+  @@index([requestId, ts])
+  @@map("workflow_migration_events")
+}
+
+model RequestAttachment {
+  id         String          @id
+  requestId  String
+  name       String
+  size       String
+  type       String
+  storageKey String?
+  dataUrl    String?         @db.LongText
+  request    ApprovalRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+
+  @@index([requestId])
+  @@map("request_attachments")
+}
+
+model QueryMessage {
+  id         String          @id
+  requestId  String
+  authorId   String
+  authorName String
+  authorRole String
+  kind       String
+  text       String          @db.Text
+  ts         String
+  request    ApprovalRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+
+  @@index([requestId, ts])
+  @@map("query_messages")
+}
+
+model AuditLog {
+  id           String  @id
+  actorId      String
+  actorName    String
+  actorRole    String
+  action       String
+  targetType   String
+  targetId     String
+  metadataJson String? @db.LongText
+  requestId    String?
+  ts           String
+
+  @@index([targetType, targetId])
+  @@index([actorId])
+  @@index([requestId])
+  @@index([ts])
+  @@map("audit_logs")
+}
+
+model SOP {
+  id     String  @id
+  title  String
+  desc   String  @db.Text
+  date   String
+  pdfUrl String? @db.Text
+
+  @@map("sops")
+}

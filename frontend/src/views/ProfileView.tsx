@@ -4,7 +4,7 @@ import { getRoleDisplayName } from '../services/api';
 
 interface ProfileViewProps {
   user: User;
-  onUpdateUser?: (updated: User) => void;
+  onUpdateUser?: (updated: User) => Promise<void>;
 }
 
 export const ProfileView: React.FC<ProfileViewProps> = ({ user, onUpdateUser }) => {
@@ -12,9 +12,13 @@ export const ProfileView: React.FC<ProfileViewProps> = ({ user, onUpdateUser }) 
   const [name, setName] = useState(user.name);
   const [dept, setDept] = useState(user.dept);
   const [businessUnit, setBusinessUnit] = useState(user.businessUnit || 'Head Office');
+  const [company, setCompany] = useState(user.company || '');
+  const [campus, setCampus] = useState(user.campus || '');
   const [successMsg, setSuccessMsg] = useState('');
+  const [errorMsg, setErrorMsg] = useState('');
+  const [saving, setSaving] = useState(false);
 
-  const handleSave = (e: React.FormEvent) => {
+  const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!name.trim() || !dept.trim()) return;
 
@@ -23,26 +27,39 @@ export const ProfileView: React.FC<ProfileViewProps> = ({ user, onUpdateUser }) 
       name: name.trim(),
       dept: dept.trim(),
       businessUnit: businessUnit.trim() || 'Head Office',
+      company: company.trim(),
+      campus: campus.trim(),
+      email: user.email,
       role: user.role // Role is locked and cannot be changed
     };
 
-    if (onUpdateUser) {
-      onUpdateUser(updatedUser);
+    if (!onUpdateUser) return;
+    setSaving(true);
+    setErrorMsg('');
+    setSuccessMsg('');
+    try {
+      await onUpdateUser(updatedUser);
+      setIsEditing(false);
+      setSuccessMsg('Profile updated successfully.');
+      setTimeout(() => setSuccessMsg(''), 3000);
+    } catch (error) {
+      setErrorMsg(error instanceof Error ? error.message : 'Profile update failed.');
+    } finally {
+      setSaving(false);
     }
-    setIsEditing(false);
-    setSuccessMsg('Profile updated successfully!');
-    setTimeout(() => setSuccessMsg(''), 3000);
   };
 
   const handleCancel = () => {
     setName(user.name);
     setDept(user.dept);
     setBusinessUnit(user.businessUnit || 'Head Office');
+    setCompany(user.company || '');
+    setCampus(user.campus || '');
     setIsEditing(false);
   };
 
   return (
-    <div className="px-6 py-6 max-w-xl">
+    <div className="w-full px-6 py-6">
       <div className="flex items-center justify-between mb-6">
         <div>
           <h1 className="text-2xl font-bold text-slate-900 tracking-tight">My Profile</h1>
@@ -69,6 +86,7 @@ export const ProfileView: React.FC<ProfileViewProps> = ({ user, onUpdateUser }) 
           {successMsg}
         </div>
       )}
+      {errorMsg && <div role="alert" className="mb-4 border-l-4 border-red-600 bg-red-50 px-4 py-3 text-sm text-red-800">{errorMsg}</div>}
 
       <div className="bg-white rounded-2xl border border-slate-200/80 shadow-2xs p-7">
         <div className="flex items-center gap-4 mb-6 pb-6 border-b border-slate-100">
@@ -177,12 +195,34 @@ export const ProfileView: React.FC<ProfileViewProps> = ({ user, onUpdateUser }) 
               </div>
             </div>
 
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">Company</label>
+                <input
+                  type="text"
+                  value={company}
+                  onChange={e => setCompany(e.target.value)}
+                  className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">Campus</label>
+                <input
+                  type="text"
+                  value={campus}
+                  onChange={e => setCampus(e.target.value)}
+                  className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+            </div>
+
             <div className="flex items-center gap-2 pt-3 border-t border-slate-100">
               <button
                 type="submit"
+                disabled={saving}
                 className="bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold px-4 py-2 rounded-lg transition cursor-pointer"
               >
-                Save Changes
+                {saving ? 'Saving…' : 'Save Changes'}
               </button>
               <button
                 type="button"

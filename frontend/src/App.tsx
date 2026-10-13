@@ -1,12 +1,6 @@
-import React, { useState, useEffect } from 'react';
-import {
-  User,
-  ApprovalRequest,
-  NavigationTab,
-  RequestStatus,
-  ApprovalStage
-} from './services/types';
-import { initialRequests, initialUsers } from './services/api';
+import React, { useEffect, useState } from 'react';
+import { User, ApprovalRequest, NavigationTab, RequestStatus, UserAccount, WorkflowBranch, canCreateRequests } from './services/types';
+import { api, ApiError } from './services/apiClient';
 import { LoginView } from './views/LoginView';
 import { Sidebar } from './components/Sidebar';
 import { Header } from './components/Header';
@@ -19,426 +13,190 @@ import { CompletionStatusView } from './views/CompletionStatusView';
 import { ProfileView } from './views/ProfileView';
 import { UserManagementView } from './views/UserManagementView';
 import { FlaggedRequestsView } from './views/FlaggedRequestsView';
-import { UserAccount } from './services/types';
+import { WorkflowManagementView } from './views/WorkflowManagementView';
+
+type DashboardData = { metrics: { total: number; pending: number; approved: number; rejected: number; queries: number; escalated: number; policies: number } };
+const isAdmin = (user: User) => user.role === 'CEO' || user.role === 'CHAIRMAN';
 
 export const App: React.FC = () => {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [activeTab, setActiveTab] = useState<NavigationTab>('dashboard');
-  const [requests, setRequests] = useState<ApprovalRequest[]>(initialRequests);
+  const [requests, setRequests] = useState<ApprovalRequest[]>([]);
   const [selectedRequest, setSelectedRequest] = useState<ApprovalRequest | null>(null);
   const [statusFilter, setStatusFilter] = useState<RequestStatus | 'ALL'>('ALL');
-  const [managedUsers, setManagedUsers] = useState<UserAccount[]>(initialUsers);
-  const [managedRoles, setManagedRoles] = useState<string[]>(Array.from(new Set(initialUsers.map(user => user.role))));
+  const [managedUsers, setManagedUsers] = useState<UserAccount[]>([]);
+  const [managedRoles, setManagedRoles] = useState<string[]>([]);
+  const [dashboardData, setDashboardData] = useState<DashboardData | null>(null);
+  const [booting, setBooting] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [appError, setAppError] = useState('');
 
-  // Load persisted user list & session from localStorage on startup
-  useEffect(() => {
+  const updateRequest = (updated: ApprovalRequest) => {
+    setRequests(previous => [updated, ...previous.filter(request => request.id !== updated.id)]);
+    setSelectedRequest(previous => previous?.id === updated.id ? updated : previous);
+  };
+
+  const refreshDashboard = async () => {
+    const data = await api.dashboard();
+    setDashboardData(data);
+  };
+
+  const refreshAdminData = async (user: User) => {
+    if (!isAdmin(user)) return;
+    const management = await api.management();
+    setManagedUsers(management.users);
+    setManagedRoles(management.roles);
+  };
+
+  const loadAuthenticatedState = async (user: User) => {
+    setRefreshing(true);
+    setAppError('');
     try {
-      const savedUsers = localStorage.getItem('smart_approval_all_users_v2');
-      if (savedUsers) {
-        const parsed = JSON.parse(savedUsers);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          initialUsers.length = 0;
-          parsed.forEach((u: any) => initialUsers.push(u));
-          setManagedUsers(parsed);
-        }
-      }
-
-      const savedRoles = localStorage.getItem('smart_approval_roles_v1');
-      if (savedRoles) setManagedRoles(JSON.parse(savedRoles));
-
-      const savedRequests = localStorage.getItem('smart_approval_requests_v2');
-      if (savedRequests) {
-        const parsedReqs = JSON.parse(savedRequests);
-        if (Array.isArray(parsedReqs) && parsedReqs.length > 0) {
-          setRequests(parsedReqs);
-        }
-      }
-    } catch (e) {
-      console.error('Failed to load local storage:', e);
+      const [freshRequests, metrics] = await Promise.all([api.listRequests(), api.dashboard()]);
+      setRequests(freshRequests);
+      setDashboardData(metrics);
+      await refreshAdminData(user);
+      setCurrentUser(user);
+    } catch (error) {
+      setCurrentUser(null);
+      throw error;
+    } finally {
+      setRefreshing(false);
     }
+  };
+
+  useEffect(() => {
+    let mounted = true;
+    api.me().then(async user => {
+      if (mounted) await loadAuthenticatedState(user);
+    }).catch(error => {
+      if (mounted && !(error instanceof ApiError && error.status === 401)) {
+        setAppError(error instanceof Error ? error.message : 'Unable to connect to FlowNexus API.');
+      }
+    }).finally(() => {
+      if (mounted) setBooting(false);
+    });
+    return () => { mounted = false; };
   }, []);
 
-  const persistUsers = (users: UserAccount[]) => {
-    setManagedUsers(users);
-    initialUsers.length = 0;
-    users.forEach(user => initialUsers.push(user as UserAccount & { password: string }));
-    localStorage.setItem('smart_approval_all_users_v2', JSON.stringify(users));
+  const handleLogin = async (email: string, password: string) => {
+    const { user } = await api.login(email, password);
+    await loadAuthenticatedState(user);
+    setActiveTab('dashboard');
   };
 
-  const handleCreateManagedUser = (user: UserAccount) => {
-    persistUsers([...managedUsers, { ...user, id: `usr-${Date.now()}` }]);
-    if (!managedRoles.includes(user.role)) {
-      const nextRoles = [...managedRoles, user.role];
-      setManagedRoles(nextRoles);
-      localStorage.setItem('smart_approval_roles_v1', JSON.stringify(nextRoles));
+  const handleLogout = async () => {
+    try { await api.logout(); } finally {
+      setCurrentUser(null);
+      setRequests([]);
+      setManagedUsers([]);
+      setManagedRoles([]);
+      setDashboardData(null);
+      setSelectedRequest(null);
+      setActiveTab('dashboard');
     }
   };
 
-  const handleDeleteManagedUser = (userId: string) => {
-    persistUsers(managedUsers.filter(user => user.id !== userId));
+  const handleCreateRequest = async (data: Omit<ApprovalRequest, 'id' | 'date' | 'status' | 'businessHoursIdle' | 'auditTrail' | 'currentStage'>) => {
+    const request = await api.createRequest(data);
+    updateRequest(request);
+    setActiveTab('all-requests');
+    setSelectedRequest(request);
+    await refreshDashboard();
+    return request;
   };
 
-  const handleCreateRole = (roleName: string) => {
-    const role = roleName.trim().toUpperCase();
-    if (!role || managedRoles.includes(role)) return;
-    const nextRoles = [...managedRoles, role];
-    setManagedRoles(nextRoles);
-    localStorage.setItem('smart_approval_roles_v1', JSON.stringify(nextRoles));
+  const handleRouteToBranch = async (id: string, branch: WorkflowBranch) => {
+    updateRequest(await api.routeRequest(id, branch));
   };
 
-  const handleDeleteRole = (role: string, replacementRole: string) => {
-    if (!replacementRole || role === 'CEO') return;
-    persistUsers(managedUsers.map(user => user.role === role ? { ...user, role: replacementRole } : user));
-    setManagedRoles(managedRoles.filter(existingRole => existingRole !== role));
-    localStorage.setItem('smart_approval_roles_v1', JSON.stringify(managedRoles.filter(existingRole => existingRole !== role)));
-    setRequests(prev => {
-      const updated = prev.map(request => request.assignedRole === role || request.currentStage === role
-        ? { ...request, assignedRole: replacementRole, currentStage: request.currentStage === role ? replacementRole : request.currentStage, auditTrail: [...request.auditTrail, { ts: formatTimestamp(), actor: 'CEO', action: `Role ${role} removed; responsibility transferred to ${replacementRole}` }] }
-        : request);
-      localStorage.setItem('smart_approval_requests_v2', JSON.stringify(updated));
-      return updated;
-    });
+  const handleApproveWorkflowStep = async (id: string, higherAuthorityOverride = false) => {
+    updateRequest(await api.approveRequest(id, higherAuthorityOverride ? 'advance' : undefined));
+    await refreshDashboard();
   };
 
-  const handleReassignEscalatedRequest = (requestId: string, targetUserId: string) => {
-    const target = managedUsers.find(user => user.id === targetUserId);
-    if (!target || currentUser?.role !== 'CEO') return;
-    setRequests(prev => {
-      const updated = prev.map(request => request.id === requestId && request.status === 'ESCALATED'
-        ? { ...request, status: 'PENDING' as RequestStatus, currentStage: target.role, assignedUserId: target.id, assignedRole: target.role, businessHoursIdle: 0, auditTrail: [...request.auditTrail, { ts: formatTimestamp(), actor: `${currentUser.name} (CEO)`, action: `Escalated request routed to ${target.name} (${target.role})` }] }
-        : request);
-      localStorage.setItem('smart_approval_requests_v2', JSON.stringify(updated));
-      return updated;
-    });
-  };
-
-  const formatTimestamp = () => {
-    return new Date().toLocaleString('en-IN', {
-      day: '2-digit',
-      month: '2-digit',
-      year: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit'
-    });
-  };
-
-  const formatDate = () => {
-    return new Date().toLocaleDateString('en-IN', {
-      day: '2-digit',
-      month: '2-digit',
-      year: 'numeric'
-    });
-  };
-
-  // Permanent User Profile Update
-  const handleUpdateUser = (updatedUser: User) => {
-    setCurrentUser(updatedUser);
-
-    const idx = initialUsers.findIndex(
-      u => u.email.toLowerCase() === updatedUser.email.toLowerCase()
-    );
-    if (idx !== -1) {
-      initialUsers[idx] = {
-        ...initialUsers[idx],
-        name: updatedUser.name,
-        dept: updatedUser.dept,
-        company: updatedUser.company,
-        businessUnit: updatedUser.businessUnit,
-        role: updatedUser.role
-      };
-    }
-
-    try {
-      localStorage.setItem('smart_approval_all_users_v2', JSON.stringify(initialUsers));
-    } catch (e) {
-      console.error('Failed to save user to localStorage:', e);
-    }
-  };
-
-  // Advance Stage in the Multi-Tier Chain
-  const handleAdvanceStage = (
-    requestId: string,
-    nextStage: ApprovalStage,
-    actionDesc: string
-  ) => {
-    if (!currentUser) return;
-
-    setRequests(prev => {
-      const updated = prev.map(r => {
-        if (r.id === requestId) {
-          return {
-            ...r,
-            currentStage: nextStage,
-            status: 'PENDING' as RequestStatus,
-            businessHoursIdle: 0,
-            auditTrail: [
-              ...r.auditTrail,
-              {
-                ts: formatTimestamp(),
-                actor: `${currentUser.name} (${currentUser.role})`,
-                action: actionDesc
-              }
-            ]
-          };
-        }
-        return r;
+  const handleUpdateStatus = async (id: string, status: RequestStatus, _action: string, extra?: Partial<ApprovalRequest> & { queryResponse?: string }) => {
+    let updated: ApprovalRequest;
+    if (status === 'REJECTED') updated = await api.rejectRequest(id, extra?.description);
+    else if (status === 'QUERIED') updated = await api.raiseQuery(id, extra?.query || '');
+    else if (status === 'APPROVED') updated = await api.approveRequest(id, 'direct');
+    else if (status === 'ESCALATED') updated = await api.escalateRequest(id);
+    else if (status === 'PENDING') {
+      updated = await api.respondToQuery(id, extra?.queryResponse || '', {
+        title: extra?.title,
+        amount: extra?.amount,
+        description: extra?.description
       });
-
-      try {
-        localStorage.setItem('smart_approval_requests_v2', JSON.stringify(updated));
-      } catch (e) {}
-
-      return updated;
-    });
-
-    if (selectedRequest?.id === requestId) {
-      setSelectedRequest(prev =>
-        prev
-          ? {
-              ...prev,
-              currentStage: nextStage,
-              status: 'PENDING',
-              businessHoursIdle: 0,
-              auditTrail: [
-                ...prev.auditTrail,
-                {
-                  ts: formatTimestamp(),
-                  actor: `${currentUser.name} (${currentUser.role})`,
-                  action: actionDesc
-                }
-              ]
-            }
-          : null
-      );
-    }
+    } else throw new Error('Unsupported request transition.');
+    updateRequest(updated);
+    await refreshDashboard();
   };
 
-  // Update Status & Audit Trail
-  const handleUpdateStatus = (
-    requestId: string,
-    newStatus: RequestStatus,
-    actionDesc: string,
-    extra?: Partial<ApprovalRequest>
-  ) => {
-    if (!currentUser) return;
-
-    setRequests(prev => {
-      const updated = prev.map(r => {
-        if (r.id === requestId) {
-          return {
-            ...r,
-            ...extra,
-            status: newStatus,
-            businessHoursIdle: 0,
-            auditTrail: [
-              ...r.auditTrail,
-              {
-                ts: formatTimestamp(),
-                actor: `${currentUser.name} (${currentUser.role})`,
-                action: actionDesc
-              }
-            ]
-          };
-        }
-        return r;
-      });
-
-      try {
-        localStorage.setItem('smart_approval_requests_v2', JSON.stringify(updated));
-      } catch (e) {}
-
-      return updated;
-    });
-
-    if (selectedRequest?.id === requestId) {
-      setSelectedRequest(prev =>
-        prev
-          ? {
-              ...prev,
-              ...extra,
-              status: newStatus,
-              businessHoursIdle: 0,
-              auditTrail: [
-                ...prev.auditTrail,
-                {
-                  ts: formatTimestamp(),
-                  actor: `${currentUser.name} (${currentUser.role})`,
-                  action: actionDesc
-                }
-              ]
-            }
-          : null
-      );
-    }
+  const handleUpdateProfile = async (updated: User) => {
+    const user = await api.updateProfile(updated);
+    setCurrentUser(user);
   };
 
-  // Create New Request
-  const handleCreateRequest = (
-    newReqData: Omit<ApprovalRequest, 'id' | 'date' | 'status' | 'businessHoursIdle' | 'auditTrail' | 'currentStage'>
-  ) => {
-    if (!currentUser) return;
-
-    const newId = `REQ-00${requests.length + 1}`;
-    const nowTs = formatTimestamp();
-
-    const newReq: ApprovalRequest = {
-      ...newReqData,
-      id: newId,
-      date: formatDate(),
-      status: 'PENDING',
-      currentStage: 'MANAGER', // Initial stage is Line Manager review
-      businessHoursIdle: 0,
-      auditTrail: [
-        {
-          ts: nowTs,
-          actor: currentUser.name,
-          action: `Request submitted to Approval Queue with ${newReqData.attachments?.length || 0} attachment(s)`
-        },
-        { ts: nowTs, actor: 'System', action: 'Assigned to Line Manager for initial review & routing' }
-      ]
-    };
-
-    setRequests(prev => {
-      const updated = [newReq, ...prev];
-      try {
-        localStorage.setItem('smart_approval_requests_v2', JSON.stringify(updated));
-      } catch (e) {}
-      return updated;
-    });
-
-    setTimeout(() => {
-      setActiveTab('all-requests');
-      setSelectedRequest(newReq);
-    }, 1500);
+  const handleCreateManagedUser = async (user: UserAccount) => {
+    await api.createUser(user);
+    if (currentUser) await refreshAdminData(currentUser);
   };
+
+  const handleUpdateManagedUser = async (user: UserAccount) => {
+    await api.updateUser(user);
+    if (currentUser) await refreshAdminData(currentUser);
+  };
+
+  const handleDeleteManagedUser = async (userId: string) => {
+    await api.deactivateUser(userId);
+    if (currentUser) await refreshAdminData(currentUser);
+  };
+
+  const handleReassignRequest = async (requestId: string, targetUserId: string) => {
+    updateRequest(await api.reassignRequest(requestId, targetUserId));
+  };
+
+  const handleMigrateRequest = async (requestId: string, reason: string, replacementRole?: string, targetVersionId?: string) => {
+    const updated = await api.migrateRequestWorkflow(requestId, reason, replacementRole, targetVersionId);
+    updateRequest(updated);
+    await refreshDashboard();
+  };
+
+  const handleFlag = async (id: string, flagged: boolean) => {
+    updateRequest(await api.setFlag(id, flagged));
+  };
+
+  if (booting || refreshing && !currentUser) {
+    return <div className="flex min-h-screen items-center justify-center text-sm text-slate-500">Connecting securely to FlowNexus…</div>;
+  }
 
   if (!currentUser) {
     return (
-      <LoginView
-        onLogin={user => {
-          const latest = initialUsers.find(
-            u => u.email.toLowerCase() === user.email.toLowerCase()
-          );
-          if (latest) {
-            const { password: _, ...userSafe } = latest;
-            setCurrentUser(userSafe);
-          } else {
-            setCurrentUser(user);
-          }
-          setActiveTab('dashboard');
-        }}
-        onRegister={() => {
-          try {
-            localStorage.setItem('smart_approval_all_users_v2', JSON.stringify(initialUsers));
-          } catch (e) {}
-        }}
-      />
+      <div className="min-h-full">
+        {appError && <div role="alert" className="mx-auto mt-4 max-w-md border-l-4 border-red-600 bg-red-50 px-4 py-3 text-sm text-red-800">{appError}</div>}
+        <LoginView onLogin={handleLogin} />
+      </div>
     );
   }
 
+  const admin = isAdmin(currentUser);
   return (
     <div className="flex h-full bg-slate-50 font-sans">
-      {/* Left Sidebar */}
-      <Sidebar
-        activeTab={activeTab}
-        userRole={currentUser.role}
-        onSelectTab={tab => {
-          setActiveTab(tab);
-          setSelectedRequest(null);
-        }}
-      />
-
-      {/* Main Content Area */}
-      <div className="flex-1 flex flex-col overflow-hidden">
-        {/* Top Header */}
-        <Header
-          user={currentUser}
-          onLogout={() => {
-            setCurrentUser(null);
-            setSelectedRequest(null);
-          }}
-        />
-
-        {/* Dynamic Views */}
+      <Sidebar activeTab={activeTab} userRole={currentUser.role} onSelectTab={tab => { setActiveTab(tab); setSelectedRequest(null); }} />
+      <div className="flex-1 flex min-w-0 flex-col overflow-hidden">
+        <Header user={currentUser} onLogout={() => { void handleLogout(); }} />
+        {appError && <div role="alert" className="border-b border-red-200 bg-red-50 px-5 py-2 text-sm text-red-800">{appError}</div>}
         <main className="flex-1 overflow-y-auto">
-          {activeTab === 'dashboard' && (
-            <DashboardView
-              user={currentUser}
-              requests={requests}
-              onNavigate={(tab, filter) => {
-                setActiveTab(tab);
-                if (filter) setStatusFilter(filter);
-              }}
-              onSelectRequest={req => {
-                setSelectedRequest(req);
-              }}
-            />
-          )}
-
-          {activeTab === 'all-requests' && (
-            <AllRequestsView
-              user={currentUser}
-              requests={requests}
-              selectedRequest={selectedRequest}
-              statusFilter={statusFilter}
-              onSelectRequest={setSelectedRequest}
-              onFilterChange={setStatusFilter}
-              onUpdateStatus={handleUpdateStatus}
-              onAdvanceStage={handleAdvanceStage}
-            />
-          )}
-
-          {activeTab === 'create-request' && currentUser.role === 'REQUESTER' && (
-            <CreateRequestView
-              user={currentUser}
-              onCreateRequest={handleCreateRequest}
-            />
-          )}
-
-          {activeTab === 'flow-categories' && (
-            <FlowCategoriesView />
-          )}
-
-          {activeTab === 'queries' && (
-            <QueriesView
-              user={currentUser}
-              requests={requests}
-              onOpenRequest={req => {
-                setSelectedRequest(req);
-                setActiveTab('all-requests');
-              }}
-            />
-          )}
-
-          {activeTab === 'completion-status' && (
-            <CompletionStatusView user={currentUser} requests={requests} />
-          )}
-
-          {activeTab === 'my-profile' && (
-            <ProfileView
-              user={currentUser}
-              onUpdateUser={handleUpdateUser}
-            />
-          )}
-
-          {activeTab === 'user-management' && currentUser.role === 'CEO' && (
-            <UserManagementView
-              users={managedUsers}
-              roles={managedRoles}
-              requests={requests}
-              onCreateUser={handleCreateManagedUser}
-              onDeleteUser={handleDeleteManagedUser}
-              onCreateRole={handleCreateRole}
-              onDeleteRole={handleDeleteRole}
-              onReassignRequest={handleReassignEscalatedRequest}
-            />
-          )}
-          {activeTab === 'flagged-requests' && currentUser.role === 'CEO' && (
-            <FlaggedRequestsView
-              requests={requests}
-              onOpenRequest={request => { setSelectedRequest(request); setActiveTab('all-requests'); }}
-            />
-          )}
+          {activeTab === 'dashboard' && <DashboardView user={currentUser} requests={requests} metrics={dashboardData?.metrics} onNavigate={(tab, filter) => { setActiveTab(tab); if (filter) setStatusFilter(filter); }} onSelectRequest={setSelectedRequest} />}
+          {activeTab === 'all-requests' && <AllRequestsView user={currentUser} requests={requests} selectedRequest={selectedRequest} statusFilter={statusFilter} onSelectRequest={setSelectedRequest} onFilterChange={setStatusFilter} onUpdateStatus={handleUpdateStatus} onApproveStep={handleApproveWorkflowStep} onRouteToBranch={handleRouteToBranch} onMigrateWorkflow={handleMigrateRequest} />}
+          {activeTab === 'create-request' && (canCreateRequests(currentUser.role) ? <CreateRequestView user={currentUser} onCreateRequest={handleCreateRequest} /> : <div className="p-8 text-center text-red-600 font-semibold bg-red-50 m-6 rounded-xl border border-red-200">Access Denied: Your role ({currentUser.role}) is not authorized to create new requests. Creation is reserved for Requester through Dean.</div>)}
+          {activeTab === 'flow-categories' && admin && <FlowCategoriesView />}
+          {activeTab === 'queries' && <QueriesView user={currentUser} requests={requests} onOpenRequest={request => { setSelectedRequest(request); setActiveTab('all-requests'); }} />}
+          {activeTab === 'completion-status' && <CompletionStatusView user={currentUser} requests={requests} />}
+          {activeTab === 'my-profile' && <ProfileView user={currentUser} onUpdateUser={handleUpdateProfile} />}
+          {activeTab === 'user-management' && admin && <UserManagementView users={managedUsers} roles={managedRoles} currentUser={currentUser} requests={requests} onCreateUser={handleCreateManagedUser} onDeleteUser={handleDeleteManagedUser} onUpdateUser={handleUpdateManagedUser} onReassignRequest={handleReassignRequest} />}
+          {activeTab === 'workflow-management' && admin && <WorkflowManagementView user={currentUser} requests={requests} users={managedUsers} onUpdateRequest={updateRequest} />}
+          {activeTab === 'flagged-requests' && admin && <FlaggedRequestsView requests={requests} onOpenRequest={request => { setSelectedRequest(request); setActiveTab('all-requests'); }} onSetFlag={handleFlag} />}
         </main>
       </div>
     </div>

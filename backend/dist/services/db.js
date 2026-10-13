@@ -1,182 +1,322 @@
 "use strict";
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.db = exports.Database = void 0;
-// In-memory Database with initial mock seed matching the Figma application
-class Database {
-    static instance;
-    roles = [
-        'REQUESTER',
-        'APPROVER',
-        'AUTHORITY',
-        'CEO'
-    ];
-    users = [
-        {
-            id: 'usr-1',
-            email: 'requester@gmail.com',
-            password: 'pass123',
-            name: 'Arun',
-            role: 'REQUESTER',
-            dept: 'Computer Science and Engineering',
-            company: 'Northstar Group', businessUnit: 'Head Office'
-        },
-        {
-            id: 'usr-2',
-            email: 'approver@gmail.com',
-            password: 'pass123',
-            name: 'Rajan Mehta',
-            role: 'APPROVER',
-            dept: 'IT Department',
-            company: 'Northstar Group', businessUnit: 'Head Office'
-        },
-        {
-            id: 'usr-3',
-            email: 'authority@gmail.com',
-            password: 'pass123',
-            name: 'Dr. Suresh Kumar',
-            role: 'AUTHORITY',
-            dept: 'Administration',
-            company: 'Northstar Group', businessUnit: 'Head Office'
-        },
-        {
-            id: 'usr-4',
-            email: 'ceo@gmail.com',
-            password: 'pass123',
-            name: 'Dr. Suresh Kumar',
-            role: 'CEO',
-            dept: 'Chief Executive Office',
-            company: 'Northstar Group', businessUnit: 'Corporate Services'
-        }
-    ];
-    requests = [
-        {
-            id: 'REQ-001',
-            title: 'Industrial visit',
-            department: 'Computer Science and Engineering',
-            amount: 100000,
-            date: '27/08/2026',
-            status: 'APPROVED',
-            category: 'Purchase', requestType: 'Purchase',
-            requester: 'Arun',
-            description: 'Regional client visit and team learning program for the technology team.',
-            hoursIdle: 0,
-            auditTrail: [
-                { ts: '27/08/2026 10:00', actor: 'Arun', action: 'Request submitted' },
-                { ts: '27/08/2026 11:30', actor: 'System', action: 'Assigned to Rajan Mehta (Approver)' },
-                { ts: '27/08/2026 14:00', actor: 'Rajan Mehta', action: 'Request approved' }
-            ],
-            createdAt: '2026-08-27T10:00:00.000Z',
-            updatedAt: '2026-08-27T14:00:00.000Z'
-        },
-        {
-            id: 'REQ-002',
-            title: 'Lab Equipment Purchase',
-            department: 'Computer Science and Engineering',
-            amount: 250000,
-            date: '28/08/2026',
-            status: 'PENDING',
-            category: 'Equipment', requestType: 'Equipment',
-            requester: 'Arun',
-            description: 'Purchase of 10 high-performance workstations for the AI/ML lab.',
-            hoursIdle: 6.5,
-            auditTrail: [
-                { ts: '28/08/2026 09:15', actor: 'Arun', action: 'Request submitted' },
-                { ts: '28/08/2026 09:22', actor: 'System', action: 'Assigned to Rajan Mehta (Approver)' }
-            ],
-            createdAt: '2026-08-28T09:15:00.000Z',
-            updatedAt: '2026-08-28T09:22:00.000Z'
-        },
-        {
-            id: 'REQ-003',
-            title: 'Conference Registration',
-            department: 'IT Department',
-            amount: 35000,
-            date: '29/08/2026',
-            status: 'QUERIED',
-            category: 'Travel', requestType: 'Travel',
-            requester: 'Priya Nair',
-            description: 'Registration and travel support for an industry technology conference.',
-            hoursIdle: 3.2,
-            query: 'Please provide the conference brochure and list of attendees.',
-            auditTrail: [
-                { ts: '29/08/2026 11:00', actor: 'Priya Nair', action: 'Request submitted' },
-                { ts: '29/08/2026 11:10', actor: 'System', action: 'Assigned to Rajan Mehta (Approver)' },
-                { ts: '29/08/2026 14:30', actor: 'Rajan Mehta', action: 'Query raised — awaiting requester response' }
-            ],
-            createdAt: '2026-08-29T11:00:00.000Z',
-            updatedAt: '2026-08-29T14:30:00.000Z'
-        },
-        {
-            id: 'REQ-004',
-            title: 'Technology Team Development Program',
-            department: 'IT Department',
-            amount: 80000,
-            date: '29/08/2026',
-            status: 'ESCALATED',
-            category: 'Equipment', requestType: 'Equipment',
-            requester: 'Daniel Osei',
-            description: 'Three-day FDP on Deep Learning and Neural Networks — 15 participants.',
-            hoursIdle: 14.8,
-            auditTrail: [
-                { ts: '29/08/2026 08:00', actor: 'Daniel Osei', action: 'Request submitted' },
-                { ts: '29/08/2026 08:12', actor: 'System', action: 'Assigned to approver' },
-                { ts: '29/08/2026 22:50', actor: 'System', action: 'SLA breached — escalated to higher authority' }
-            ],
-            createdAt: '2026-08-29T08:00:00.000Z',
-            updatedAt: '2026-08-29T22:50:00.000Z'
-        },
-        {
-            id: 'REQ-005',
-            title: 'Sports Equipment',
-            department: 'Physical Education',
-            amount: 45000,
-            date: '30/08/2026',
-            status: 'REJECTED',
-            category: 'Purchase', requestType: 'Purchase',
-            requester: 'Marco Ferreira',
-            description: 'Purchase of cricket and football equipment for inter-collegiate tournaments.',
-            hoursIdle: 0,
-            auditTrail: [
-                { ts: '30/08/2026 10:00', actor: 'Marco Ferreira', action: 'Request submitted' },
-                { ts: '30/08/2026 10:15', actor: 'System', action: 'Assigned to approver' },
-                { ts: '30/08/2026 13:00', actor: 'Rajan Mehta', action: 'Request rejected — budget overrun' }
-            ],
-            createdAt: '2026-08-30T10:00:00.000Z',
-            updatedAt: '2026-08-30T13:00:00.000Z'
-        }
-    ];
-    sops = [
-        {
-            id: 'sop-1',
-            title: 'Procurement Policy v2.1',
-            desc: 'Guidelines for vendor selection and purchase orders above ₹50,000.',
-            date: '15/08/2026'
-        },
-        {
-            id: 'sop-2',
-            title: 'Travel & Expense Policy',
-            desc: 'Reimbursement limits and approval hierarchy for official travel.',
-            date: '01/07/2026'
-        },
-        {
-            id: 'sop-3',
-            title: 'SLA Guidelines',
-            desc: '10-hour SLA threshold for all approval requests with auto-escalation rules.',
-            date: '10/06/2026'
-        },
-        {
-            id: 'sop-4',
-            title: 'Business Activity Approval SOP',
-            desc: 'Procedure for industrial visits, conferences, and FDP approvals.',
-            date: '20/05/2026'
-        }
-    ];
-    static getInstance() {
-        if (!Database.instance) {
-            Database.instance = new Database();
-        }
-        return Database.instance;
+exports.databaseIsReady = exports.withMongoTransaction = exports.withTransaction = exports.writeAuditEvent = exports.initializeDatabase = exports.connectDatabase = exports.getPrisma = exports.prisma = void 0;
+const client_1 = require("@prisma/client");
+const node_crypto_1 = require("node:crypto");
+const node_net_1 = __importDefault(require("node:net"));
+const node_fs_1 = __importDefault(require("node:fs"));
+const node_path_1 = __importDefault(require("node:path"));
+const node_child_process_1 = require("node:child_process");
+const workflowService_1 = require("./workflowService");
+const auth_1 = require("./auth");
+exports.prisma = new client_1.PrismaClient({
+    log: process.env.NODE_ENV === 'development' ? ['warn', 'error'] : ['error']
+});
+const getPrisma = () => exports.prisma;
+exports.getPrisma = getPrisma;
+let isDbConnected = false;
+let connectionPromise;
+const checkPortOpen = (port, host = '127.0.0.1', timeout = 1000) => {
+    return new Promise(resolve => {
+        const socket = new node_net_1.default.Socket();
+        socket.setTimeout(timeout);
+        socket.once('connect', () => {
+            socket.destroy();
+            resolve(true);
+        });
+        socket.once('timeout', () => {
+            socket.destroy();
+            resolve(false);
+        });
+        socket.once('error', () => {
+            socket.destroy();
+            resolve(false);
+        });
+        socket.connect(port, host);
+    });
+};
+const ensureMySQLDaemon = async () => {
+    const isOpen = await checkPortOpen(3306, '127.0.0.1', 800);
+    if (isOpen) {
+        return;
     }
-}
-exports.Database = Database;
-exports.db = Database.getInstance();
+    const candidateBins = [
+        process.env.MYSQL_BIN_PATH,
+        'C:\\Users\\Thirukumaran AR\\flownexus-mysql\\mariadb-11.4.5-winx64\\bin\\mysqld.exe',
+        node_path_1.default.resolve(process.cwd(), '../../flownexus-mysql/mariadb-11.4.5-winx64/bin/mysqld.exe'),
+        node_path_1.default.resolve(process.cwd(), '../flownexus-mysql/mariadb-11.4.5-winx64/bin/mysqld.exe')
+    ].filter(Boolean);
+    const mysqldBin = candidateBins.find(p => node_fs_1.default.existsSync(p));
+    if (!mysqldBin) {
+        return;
+    }
+    const candidateDataDirs = [
+        process.env.MYSQL_DATA_DIR,
+        'C:\\Users\\Thirukumaran AR\\flownexus-mysql\\data',
+        node_path_1.default.resolve(node_path_1.default.dirname(node_path_1.default.dirname(mysqldBin)), 'data')
+    ].filter(Boolean);
+    const dataDir = candidateDataDirs.find(p => node_fs_1.default.existsSync(p));
+    if (!dataDir) {
+        return;
+    }
+    console.log(`[MySQL] Port 3306 not active. Auto-starting portable MySQL from: ${mysqldBin}`);
+    const child = (0, node_child_process_1.spawn)(mysqldBin, [
+        `--datadir=${dataDir}`,
+        '--port=3306',
+        '--bind-address=127.0.0.1',
+        '--console'
+    ], {
+        detached: true,
+        stdio: 'ignore'
+    });
+    child.unref();
+    const start = Date.now();
+    while (Date.now() - start < 10000) {
+        await new Promise(r => setTimeout(r, 400));
+        if (await checkPortOpen(3306, '127.0.0.1', 500)) {
+            console.log('[MySQL] Portable MySQL server successfully auto-started on port 3306.');
+            return;
+        }
+    }
+    console.warn('[MySQL] Timed out waiting for auto-started MySQL to open port 3306.');
+};
+const systemRoles = [
+    'REQUESTER',
+    'INSTITUTION_MANAGER',
+    'MANAGER',
+    'FINANCE',
+    'ACCOUNTANT',
+    'VP',
+    'HOI',
+    'DEAN',
+    'IT',
+    'AUDIT',
+    'HR',
+    'MMI',
+    'GENERAL_MANAGER',
+    'GM',
+    'CEO',
+    'CHAIRMAN'
+];
+const initialSops = [
+    { id: 'sop-1', title: 'Procurement Policy v2.1', desc: 'Guidelines for vendor selection and purchase orders above ₹50,000.', date: '15/08/2026' },
+    { id: 'sop-2', title: 'Travel & Expense Policy', desc: 'Reimbursement limits and approval hierarchy for official travel.', date: '01/07/2026' },
+    { id: 'sop-3', title: 'SLA Guidelines', desc: '10-hour SLA threshold for all approval requests with auto-escalation rules.', date: '10/06/2026' },
+    { id: 'sop-4', title: 'Business Activity Approval SOP', desc: 'Procedure for industrial visits, conferences, and FDP approvals.', date: '20/05/2026' }
+];
+const DEFAULT_PASSWORD = 'Password@123456';
+const DEMO_PASSWORD = 'pass123';
+const SEED_USERS = [
+    { email: 'chairman@flownexus.com', name: 'Chairman Executive', role: 'CHAIRMAN', dept: 'Executive Office', employeeId: 'FN-001' },
+    { email: 'ceo@flownexus.com', name: 'Chief Executive Officer', role: 'CEO', dept: 'Executive Management', employeeId: 'FN-002' },
+    { email: 'gm@flownexus.com', name: 'General Manager', role: 'GENERAL_MANAGER', dept: 'Operations', employeeId: 'FN-003' },
+    { email: 'dean@flownexus.com', name: 'Dean of Faculty', role: 'DEAN', dept: 'Academics', employeeId: 'FN-004' },
+    { email: 'manager@flownexus.com', name: 'Institution Manager', role: 'INSTITUTION_MANAGER', dept: 'Administration', employeeId: 'FN-005' },
+    { email: 'finance@flownexus.com', name: 'Finance Controller', role: 'FINANCE', dept: 'Finance & Accounts', employeeId: 'FN-006' },
+    { email: 'accountant@flownexus.com', name: 'Accountant Lead', role: 'ACCOUNTANT', dept: 'Finance & Accounts', employeeId: 'FN-006B' },
+    { email: 'vp@flownexus.com', name: 'Vice President', role: 'VP', dept: 'Executive Operations', employeeId: 'FN-006C' },
+    { email: 'hoi@flownexus.com', name: 'Head of Institution', role: 'HOI', dept: 'Campus Administration', employeeId: 'FN-006D' },
+    { email: 'requester@flownexus.com', name: 'Alex Requester', role: 'REQUESTER', dept: 'Product Development', employeeId: 'FN-007' },
+    { email: 'hr@flownexus.com', name: 'HR Lead', role: 'HR', dept: 'Human Resources', employeeId: 'FN-008' },
+    { email: 'it@flownexus.com', name: 'IT Administrator', role: 'IT', dept: 'Information Technology', employeeId: 'FN-009' },
+    { email: 'audit@flownexus.com', name: 'Audit Officer', role: 'AUDIT', dept: 'Internal Audit', employeeId: 'FN-009B' },
+    { email: 'mmi@flownexus.com', name: 'MMI Head', role: 'MMI', dept: 'MMI Department', employeeId: 'FN-009C' },
+    { email: 'chairman@gmail.com', name: 'Board Chairman', role: 'CHAIRMAN', dept: 'Board of Directors', employeeId: 'GM-001', legacyPassword: DEMO_PASSWORD },
+    { email: 'ceo@gmail.com', name: 'Dr. Suresh Kumar (CEO)', role: 'CEO', dept: 'Chief Executive Office', employeeId: 'GM-002', legacyPassword: DEMO_PASSWORD },
+    { email: 'requester@gmail.com', name: 'Arun Requester', role: 'REQUESTER', dept: 'Computer Science and Engineering', employeeId: 'GM-003', legacyPassword: DEMO_PASSWORD },
+    { email: 'manager@gmail.com', name: 'Kavitha Institution Manager', role: 'INSTITUTION_MANAGER', dept: 'Campus Administration', employeeId: 'GM-004', legacyPassword: DEMO_PASSWORD },
+    { email: 'finance@gmail.com', name: 'Finance Head', role: 'FINANCE', dept: 'Finance & Accounts', employeeId: 'GM-005', legacyPassword: DEMO_PASSWORD },
+    { email: 'accountant@gmail.com', name: 'Accountant Senior', role: 'ACCOUNTANT', dept: 'Accounts Office', employeeId: 'GM-006', legacyPassword: DEMO_PASSWORD },
+    { email: 'vp@gmail.com', name: 'Vice President Operations', role: 'VP', dept: 'Executive Operations', employeeId: 'GM-007', legacyPassword: DEMO_PASSWORD },
+    { email: 'hoi@gmail.com', name: 'Head of Institution', role: 'HOI', dept: 'Campus Leadership', employeeId: 'GM-008', legacyPassword: DEMO_PASSWORD },
+    { email: 'dean@gmail.com', name: 'Dean Academics', role: 'DEAN', dept: 'Academic Directorate', employeeId: 'GM-009', legacyPassword: DEMO_PASSWORD },
+    { email: 'it@gmail.com', name: 'IT Systems Head', role: 'IT', dept: 'IT Services', employeeId: 'GM-010', legacyPassword: DEMO_PASSWORD },
+    { email: 'audit@gmail.com', name: 'Internal Audit Head', role: 'AUDIT', dept: 'Audit & Compliance', employeeId: 'GM-011', legacyPassword: DEMO_PASSWORD },
+    { email: 'hr@gmail.com', name: 'HR Department Head', role: 'HR', dept: 'Human Resources', employeeId: 'GM-012', legacyPassword: DEMO_PASSWORD },
+    { email: 'mmi@gmail.com', name: 'MMI Operations Lead', role: 'MMI', dept: 'MMI Directorate', employeeId: 'GM-013', legacyPassword: DEMO_PASSWORD },
+    { email: 'authority@gmail.com', name: 'General Manager Authority', role: 'GENERAL_MANAGER', dept: 'Operations Management', employeeId: 'GM-014', legacyPassword: DEMO_PASSWORD },
+    { email: 'approver@gmail.com', name: 'Rajan Mehta', role: 'DEAN', dept: 'IT Department', employeeId: 'GM-015', legacyPassword: DEMO_PASSWORD }
+];
+const connectDatabase = async (url = process.env.DATABASE_URL) => {
+    if (!url) {
+        throw new Error('DATABASE_URL is required for MySQL connection. Configure it in backend/.env with mysql://USER:PASSWORD@HOST:PORT/DATABASE. No in-memory or MongoDB fallback is permitted.');
+    }
+    if (!connectionPromise) {
+        connectionPromise = (async () => {
+            try {
+                await ensureMySQLDaemon();
+                await exports.prisma.$connect();
+                isDbConnected = true;
+                console.log(`[MySQL] Connected successfully via Prisma ORM (${url.replace(/:[^:@]+@/, ':****@')})`);
+                await (0, exports.initializeDatabase)();
+            }
+            catch (err) {
+                isDbConnected = false;
+                console.error(`[MySQL] Connection error: ${err.message}`);
+                throw err;
+            }
+        })();
+    }
+    await connectionPromise;
+};
+exports.connectDatabase = connectDatabase;
+const initializeDatabase = async () => {
+    const now = new Date().toISOString();
+    // 1. Initialize system roles
+    for (const name of systemRoles) {
+        const canCreate = ['REQUESTER', 'INSTITUTION_MANAGER', 'MANAGER', 'FINANCE', 'ACCOUNTANT', 'VP', 'HOI', 'DEAN'].includes(name);
+        await exports.prisma.role.upsert({
+            where: { name },
+            update: {
+                canCreateRequests: canCreate,
+                systemRole: true
+            },
+            create: {
+                name,
+                displayName: name,
+                canCreateRequests: canCreate,
+                systemRole: true,
+                createdBy: 'system',
+                createdAt: now,
+                updatedAt: now
+            }
+        });
+    }
+    // 2. Initialize default branch workflows (HR, IT, FINANCE)
+    const defaultWorkflows = (0, workflowService_1.createDefaultWorkflows)();
+    for (const workflow of defaultWorkflows) {
+        const existing = await exports.prisma.workflowDefinition.findUnique({ where: { id: workflow.id } });
+        if (!existing) {
+            const stagesJson = JSON.stringify({ steps: workflow.steps, branch: workflow.branch });
+            await exports.prisma.workflowDefinition.create({
+                data: {
+                    id: workflow.id,
+                    name: workflow.name,
+                    active: workflow.active,
+                    currentVersion: workflow.version,
+                    createdAt: workflow.updatedAt,
+                    updatedAt: workflow.updatedAt
+                }
+            });
+            await exports.prisma.workflowVersion.create({
+                data: {
+                    id: `ver-${workflow.id}-${workflow.version}`,
+                    workflowId: workflow.id,
+                    version: workflow.version,
+                    name: `${workflow.name} v${workflow.version}`,
+                    isPublished: true,
+                    publishedAt: workflow.updatedAt,
+                    publishedBy: 'system',
+                    stagesJson
+                }
+            });
+        }
+    }
+    // 3. Initialize General Approval Workflow
+    const defaultGw = (0, workflowService_1.getDefaultGeneralWorkflow)();
+    const existingGw = await exports.prisma.workflowDefinition.findUnique({ where: { id: defaultGw.id } });
+    if (!existingGw) {
+        const gwStagesJson = JSON.stringify({
+            stages: defaultGw.stages,
+            branchConfigs: defaultGw.branchConfigs,
+            history: defaultGw.history || []
+        });
+        await exports.prisma.workflowDefinition.create({
+            data: {
+                id: defaultGw.id,
+                name: defaultGw.name,
+                active: true,
+                currentVersion: defaultGw.version,
+                createdAt: defaultGw.activatedAt || now,
+                updatedAt: defaultGw.activatedAt || now
+            }
+        });
+        await exports.prisma.workflowVersion.create({
+            data: {
+                id: `ver-${defaultGw.id}-${defaultGw.version}`,
+                workflowId: defaultGw.id,
+                version: defaultGw.version,
+                name: `${defaultGw.name} v${defaultGw.version}`,
+                description: 'Default general multi-stage workflow with Dean checkpoint and post-Dean branches',
+                isPublished: true,
+                publishedAt: defaultGw.activatedAt || now,
+                publishedBy: defaultGw.activatedBy || 'system',
+                stagesJson: gwStagesJson
+            }
+        });
+    }
+    // 4. Initialize initial SOPs
+    for (const sop of initialSops) {
+        await exports.prisma.sOP.upsert({
+            where: { id: sop.id },
+            update: { title: sop.title, desc: sop.desc, date: sop.date },
+            create: { id: sop.id, title: sop.title, desc: sop.desc, date: sop.date }
+        });
+    }
+    // 5. Initialize demo users if not present
+    // 5. Initialize demo users with pass123 credentials
+    const demoHash = await (0, auth_1.hashPassword)(DEMO_PASSWORD);
+    for (const user of SEED_USERS) {
+        const email = user.email.toLowerCase().trim();
+        await exports.prisma.user.upsert({
+            where: { email },
+            update: {
+                name: user.name,
+                role: user.role,
+                dept: user.dept,
+                employeeId: user.employeeId,
+                passwordHash: demoHash,
+                isActive: true
+            },
+            create: {
+                id: (0, node_crypto_1.randomUUID)(),
+                email,
+                name: user.name,
+                role: user.role,
+                dept: user.dept,
+                employeeId: user.employeeId,
+                passwordHash: demoHash,
+                company: 'FlowNexus',
+                businessUnit: 'Main',
+                isActive: true,
+                createdAt: now,
+                updatedAt: now
+            }
+        });
+    }
+};
+exports.initializeDatabase = initializeDatabase;
+const writeAuditEvent = async (event, clientOrTx = exports.prisma) => {
+    const ts = new Date().toISOString();
+    return clientOrTx.auditLog.create({
+        data: {
+            id: (0, node_crypto_1.randomUUID)(),
+            actorId: event.actorId,
+            actorName: event.actorName,
+            actorRole: event.actorRole,
+            action: event.action,
+            targetType: event.targetType,
+            targetId: event.targetId,
+            metadataJson: event.metadata ? JSON.stringify(event.metadata) : null,
+            requestId: event.targetType === 'Request' ? event.targetId : null,
+            ts
+        }
+    });
+};
+exports.writeAuditEvent = writeAuditEvent;
+const withTransaction = async (operation) => {
+    return exports.prisma.$transaction(async (tx) => {
+        return operation(tx);
+    }, {
+        maxWait: 10000,
+        timeout: 30000
+    });
+};
+exports.withTransaction = withTransaction;
+// Backward-compatible alias for existing controllers
+exports.withMongoTransaction = exports.withTransaction;
+const databaseIsReady = () => isDbConnected;
+exports.databaseIsReady = databaseIsReady;
