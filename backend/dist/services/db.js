@@ -185,37 +185,7 @@ const initializeDatabase = async () => {
             }
         });
     }
-    // 2. Initialize default branch workflows (HR, IT, FINANCE)
-    const defaultWorkflows = (0, workflowService_1.createDefaultWorkflows)();
-    for (const workflow of defaultWorkflows) {
-        const existing = await exports.prisma.workflowDefinition.findUnique({ where: { id: workflow.id } });
-        if (!existing) {
-            const stagesJson = JSON.stringify({ steps: workflow.steps, branch: workflow.branch });
-            await exports.prisma.workflowDefinition.create({
-                data: {
-                    id: workflow.id,
-                    name: workflow.name,
-                    active: workflow.active,
-                    currentVersion: workflow.version,
-                    createdAt: workflow.updatedAt,
-                    updatedAt: workflow.updatedAt
-                }
-            });
-            await exports.prisma.workflowVersion.create({
-                data: {
-                    id: `ver-${workflow.id}-${workflow.version}`,
-                    workflowId: workflow.id,
-                    version: workflow.version,
-                    name: `${workflow.name} v${workflow.version}`,
-                    isPublished: true,
-                    publishedAt: workflow.updatedAt,
-                    publishedBy: 'system',
-                    stagesJson
-                }
-            });
-        }
-    }
-    // 3. Initialize General Approval Workflow
+    // 2. Initialize General Approval Workflow
     const defaultGw = (0, workflowService_1.getDefaultGeneralWorkflow)();
     const existingGw = await exports.prisma.workflowDefinition.findUnique({ where: { id: defaultGw.id } });
     if (!existingGw) {
@@ -247,6 +217,66 @@ const initializeDatabase = async () => {
                 stagesJson: gwStagesJson
             }
         });
+    }
+    // 3. Initialize the 4 Department Workflows (HR, IT, AUDIT, MMI)
+    const deptConfigs = ['IT', 'AUDIT', 'HR', 'MMI'];
+    for (const dept of deptConfigs) {
+        const deptWf = (0, workflowService_1.getDefaultDepartmentWorkflow)(dept);
+        const existing = await exports.prisma.workflowDefinition.findUnique({
+            where: { id: deptWf.id },
+            include: { versions: { orderBy: { version: 'desc' }, take: 1 } }
+        });
+        const deptStagesJson = JSON.stringify({
+            stages: deptWf.stages,
+            branchConfigs: [],
+            history: deptWf.history
+        });
+        if (!existing) {
+            await exports.prisma.workflowDefinition.create({
+                data: {
+                    id: deptWf.id,
+                    name: deptWf.name,
+                    active: true,
+                    currentVersion: 1,
+                    createdAt: now,
+                    updatedAt: now
+                }
+            });
+            await exports.prisma.workflowVersion.create({
+                data: {
+                    id: `ver-${deptWf.id}-1`,
+                    workflowId: deptWf.id,
+                    version: 1,
+                    name: `${deptWf.name} v1`,
+                    description: `Initial default multi-stage workflow for ${deptWf.name}`,
+                    isPublished: true,
+                    publishedAt: now,
+                    publishedBy: 'system',
+                    stagesJson: deptStagesJson
+                }
+            });
+        }
+        else {
+            // Ensure department workflow has the full 9-stage sequence if older legacy structure was saved
+            const latestVer = existing.versions[0];
+            if (latestVer) {
+                try {
+                    const parsed = JSON.parse(latestVer.stagesJson);
+                    if (!parsed.stages || !Array.isArray(parsed.stages) || parsed.stages.length < 9) {
+                        await exports.prisma.workflowVersion.update({
+                            where: { id: latestVer.id },
+                            data: { stagesJson: deptStagesJson }
+                        });
+                    }
+                }
+                catch {
+                    await exports.prisma.workflowVersion.update({
+                        where: { id: latestVer.id },
+                        data: { stagesJson: deptStagesJson }
+                    });
+                }
+            }
+        }
     }
     // 4. Initialize initial SOPs
     for (const sop of initialSops) {

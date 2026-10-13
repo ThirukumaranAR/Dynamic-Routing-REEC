@@ -15,6 +15,14 @@ router.delete('/roles/:role', authMiddleware_1.requireCEO, (0, authMiddleware_1.
 router.get('/workflows', authMiddleware_1.requireCEO, (0, authMiddleware_1.asyncHandler)(adminController_1.listWorkflows));
 router.put('/workflows/:workflowId', authMiddleware_1.requireCEO, (0, authMiddleware_1.asyncHandler)(adminController_1.saveWorkflow));
 router.post('/workflow-versions', authMiddleware_1.requireCEO, (0, authMiddleware_1.asyncHandler)(adminController_1.publishWorkflowVersion));
+// Independent 5 Workflow Configurations Endpoints
+router.get('/workflow-configs', authMiddleware_1.requireCEO, (0, authMiddleware_1.asyncHandler)(adminController_1.listWorkflowConfigs));
+router.get('/workflow-configs/:workflowId', authMiddleware_1.requireCEO, (0, authMiddleware_1.asyncHandler)(adminController_1.getWorkflowConfigById));
+router.post('/workflow-configs/:workflowId/draft', authMiddleware_1.requireCEO, (0, authMiddleware_1.asyncHandler)(adminController_1.saveWorkflowDraft));
+router.post('/workflow-configs/:workflowId/reset-default', authMiddleware_1.requireCEO, (0, authMiddleware_1.asyncHandler)(adminController_1.resetWorkflowDefault));
+router.post('/workflow-configs/:workflowId/validate', authMiddleware_1.requireCEO, (0, authMiddleware_1.asyncHandler)(adminController_1.validateWorkflowConfigEndpoint));
+router.post('/workflow-configs/:workflowId/activate', authMiddleware_1.requireCEO, (0, authMiddleware_1.asyncHandler)(adminController_1.activateWorkflowConfig));
+// General workflow backward-compatible endpoints
 router.get('/general-workflow', authMiddleware_1.requireCEO, (0, authMiddleware_1.asyncHandler)(adminController_1.getGeneralWorkflow));
 router.post('/general-workflow/activate', authMiddleware_1.requireCEO, (0, authMiddleware_1.asyncHandler)(adminController_1.activateGeneralWorkflow));
 router.post('/general-workflow/validate', authMiddleware_1.requireCEO, (0, authMiddleware_1.asyncHandler)(adminController_1.validateGeneralWorkflow));

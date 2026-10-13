@@ -144,11 +144,14 @@ export interface GeneralWorkflowVersion {
   }>;
 }
 
+export type OfficialRequestType = 'IT Request' | 'Audit Request' | 'HR Request' | 'MMI Request';
+export const OFFICIAL_REQUEST_TYPES: OfficialRequestType[] = ['IT Request', 'Audit Request', 'HR Request', 'MMI Request'];
+
 export interface ApprovalRequest {
   id: string;
   title: string;
   department: string;
-  amount: number;
+  amount?: number | null;
   date: string;
   status: RequestStatus;
   category: RequestCategory;
@@ -166,7 +169,7 @@ export interface ApprovalRequest {
   businessUnit?: string;
   campus?: string;
   institution?: string;
-  requestType?: RequestCategory;
+  requestType?: string | null;
   purpose?: string;
   requestDetails?: Record<string, string>;
   flaggedAt?: string;

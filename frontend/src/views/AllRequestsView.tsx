@@ -91,7 +91,7 @@ export const AllRequestsView: React.FC<AllRequestsViewProps> = ({
   useEffect(() => {
     if (selectedRequest) {
       setRevisedTitle(selectedRequest.title);
-      setRevisedAmount(selectedRequest.amount.toString());
+      setRevisedAmount(selectedRequest.amount !== null && selectedRequest.amount !== undefined ? selectedRequest.amount.toString() : '');
       setRevisedDescription(selectedRequest.description);
       setResponseExplanation('');
       setActionSuccessMsg('');
@@ -217,6 +217,10 @@ export const AllRequestsView: React.FC<AllRequestsViewProps> = ({
                 </div>
 
                 <div className="flex items-center gap-1.5 flex-wrap my-1.5">
+                  <span className="bg-blue-50 text-blue-700 border border-blue-200 text-[10px] font-bold px-1.5 py-0.5 rounded">
+                    🏷️ {r.category} {r.requestType && r.requestType !== r.category ? `· ${r.requestType}` : ''}
+                  </span>
+
                   <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
                     r.status === 'APPROVED'
                       ? 'bg-green-100 text-green-800'
@@ -609,7 +613,66 @@ export const AllRequestsView: React.FC<AllRequestsViewProps> = ({
 
           {/* Request Details & Description Card */}
           <div className="bg-white rounded-xl border border-slate-100 shadow-sm p-6 mb-4 space-y-4">
-            <h3 className="text-sm font-bold text-slate-900 uppercase tracking-wider">Request Details</h3>
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <h3 className="text-sm font-bold text-slate-900 uppercase tracking-wider">Request Details</h3>
+              <span className="bg-blue-100 text-blue-800 text-xs font-bold px-2.5 py-1 rounded-full border border-blue-200">
+                {req.requestType || req.category}
+              </span>
+            </div>
+
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 p-3 bg-slate-50 rounded-lg text-xs">
+              <div>
+                <p className="text-slate-400 font-semibold uppercase text-[10px]">Request Type</p>
+                <p className="text-slate-800 font-bold mt-0.5">{req.category}</p>
+                {req.requestType && req.requestType !== req.category && (
+                  <span className="text-[10px] text-blue-600 block">Workflow: {req.requestType}</span>
+                )}
+              </div>
+              <div>
+                <p className="text-slate-400 font-semibold uppercase text-[10px]">Estimated Cost</p>
+                <p className="text-slate-800 font-bold mt-0.5">{formatCurrencyINR(req.amount)}</p>
+              </div>
+              <div>
+                <p className="text-slate-400 font-semibold uppercase text-[10px]">Requester</p>
+                <p className="text-slate-800 font-bold mt-0.5">{req.requester}</p>
+              </div>
+              <div>
+                <p className="text-slate-400 font-semibold uppercase text-[10px]">Department</p>
+                <p className="text-slate-800 font-bold mt-0.5">{req.department}</p>
+              </div>
+            </div>
+
+            {req.requestDetails && Object.keys(req.requestDetails).length > 0 && (
+              <div className="border border-slate-200 bg-slate-50/70 rounded-lg p-3 space-y-2">
+                <p className="text-xs font-bold text-slate-700 uppercase tracking-wide flex items-center gap-1.5">
+                  <span>📋</span> {req.category} Specific Details:
+                </p>
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5 text-xs">
+                  {Object.entries(req.requestDetails).map(([key, val]) => (
+                    val ? (
+                      <div key={key} className="bg-white p-2 rounded border border-slate-200/60 shadow-2xs">
+                        <span className="text-[10px] text-slate-400 font-semibold uppercase block">
+                          {key === 'prevBalance' ? 'Previous Balance' :
+                           key === 'leaveType' ? 'Leave Category' :
+                           key === 'startDate' ? 'Start Date' :
+                           key === 'endDate' ? 'End Date' :
+                           key === 'totalDays' ? 'Total Days' :
+                           key === 'handoverPerson' ? 'Work Handover' :
+                           key === 'permissionDate' ? 'Permission Date' :
+                           key === 'startTime' ? 'Start Time' :
+                           key === 'endTime' ? 'End Time' :
+                           key === 'duration' ? 'Duration' :
+                           key === 'permissionWindow' ? 'Permission Window' :
+                           key.replace(/([A-Z])/g, ' $1').replace(/^./, str => str.toUpperCase())}
+                        </span>
+                        <span className="text-slate-800 font-semibold break-words mt-0.5 block">{String(val)}</span>
+                      </div>
+                    ) : null
+                  ))}
+                </div>
+              </div>
+            )}
+
             <p className="text-sm text-slate-700 leading-relaxed whitespace-pre-line">{req.description}</p>
             {req.purpose && req.purpose !== req.description && (
               <div>

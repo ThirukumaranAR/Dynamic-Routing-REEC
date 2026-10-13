@@ -6,10 +6,15 @@ import { prisma, withTransaction, writeAuditEvent } from '../services/db';
 import { hashPassword } from '../services/auth';
 import {
   getDefaultGeneralWorkflow,
+  getDefaultWorkflowById,
+  getDefaultStagesForDepartment,
   getRoleDisplayName,
   validateActiveWorkflows,
   validateWorkflow,
-  validateWorkflowConfig
+  validateWorkflowConfig,
+  validateDepartmentWorkflowConfig,
+  WORKFLOW_CONFIG_LIST,
+  getDepartmentRoleForRequestType
 } from '../services/workflowService';
 
 const safeUser = (user: Record<string, any>) => {
@@ -609,60 +614,237 @@ export const getAuditHistory = async (req: AuthenticatedRequest, res: Response) 
   });
 };
 
-export const getGeneralWorkflow = async (_req: AuthenticatedRequest, res: Response) => {
-  const existingVersion = await prisma.workflowVersion.findFirst({
-    where: { workflowId: 'workflow-general' },
-    orderBy: { version: 'desc' }
+export const listWorkflowConfigs = async (_req: AuthenticatedRequest, res: Response) => {
+  const definitions = await prisma.workflowDefinition.findMany({
+    where: { id: { in: WORKFLOW_CONFIG_LIST.map(w => w.id) } },
+    include: { versions: { orderBy: { version: 'desc' }, take: 1 } }
   });
 
-  if (!existingVersion) {
-    const defaultGw = getDefaultGeneralWorkflow();
-    return res.json({ success: true, generalWorkflow: defaultGw });
-  }
+  const configs = WORKFLOW_CONFIG_LIST.map(meta => {
+    const def = definitions.find(d => d.id === meta.id);
+    let stageCount = 0;
+    if (def?.versions[0]?.stagesJson) {
+      try {
+        const parsed = JSON.parse(def.versions[0].stagesJson);
+        stageCount = Array.isArray(parsed.stages) ? parsed.stages.length : (Array.isArray(parsed.steps) ? parsed.steps.length : 0);
+      } catch {}
+    } else {
+      const defaultWf = getDefaultWorkflowById(meta.id);
+      stageCount = defaultWf.stages ? defaultWf.stages.length : 0;
+    }
+    return {
+      id: meta.id,
+      name: meta.name,
+      department: meta.department,
+      description: meta.description,
+      version: def?.currentVersion || def?.versions[0]?.version || 1,
+      active: def ? def.active : true,
+      hasDraft: Boolean(def?.draftJson),
+      stageCount,
+      updatedAt: def?.updatedAt || new Date(0).toISOString()
+    };
+  });
 
-  try {
-    const parsed = JSON.parse(existingVersion.stagesJson);
-    return res.json({
-      success: true,
-      generalWorkflow: {
-        id: 'workflow-general',
-        name: existingVersion.name,
-        version: existingVersion.version,
-        active: true,
-        stages: parsed.stages || [],
-        branchConfigs: parsed.branchConfigs || [],
-        history: parsed.history || [],
-        activatedAt: existingVersion.publishedAt,
-        activatedBy: existingVersion.publishedBy
-      }
-    });
-  } catch {
-    const defaultGw = getDefaultGeneralWorkflow();
-    return res.json({ success: true, generalWorkflow: defaultGw });
-  }
+  return res.json({ success: true, workflows: configs });
 };
 
-export const activateGeneralWorkflow = async (req: AuthenticatedRequest, res: Response) => {
-  const { name, stages, branchConfigs, reason } = req.body;
+export const getWorkflowConfigById = async (req: AuthenticatedRequest, res: Response) => {
+  const { workflowId } = req.params;
+  const meta = WORKFLOW_CONFIG_LIST.find(w => w.id === workflowId);
+  if (!meta) {
+    return res.status(404).json({ success: false, message: `Workflow configuration '${workflowId}' not found.` });
+  }
+
+  const def = await prisma.workflowDefinition.findUnique({
+    where: { id: workflowId },
+    include: { versions: { orderBy: { version: 'desc' }, take: 1 } }
+  });
+
+  const defaultWf = getDefaultWorkflowById(workflowId);
+
+  if (!def || !def.versions.length) {
+    return res.json({
+      success: true,
+      workflow: {
+        id: meta.id,
+        name: meta.name,
+        department: meta.department,
+        version: 1,
+        active: true,
+        stages: defaultWf.stages || [],
+        branchConfigs: (defaultWf as any).branchConfigs || [],
+        history: defaultWf.history || [],
+        draftStages: null,
+        activatedAt: defaultWf.activatedAt,
+        activatedBy: defaultWf.activatedBy
+      }
+    });
+  }
+
+  let parsed: any = {};
+  try {
+    parsed = JSON.parse(def.versions[0].stagesJson);
+  } catch {
+    parsed = defaultWf;
+  }
+
+  let draftStages = null;
+  if (def.draftJson) {
+    try {
+      draftStages = JSON.parse(def.draftJson);
+    } catch {}
+  }
+
+  return res.json({
+    success: true,
+    workflow: {
+      id: def.id,
+      name: meta.name || def.name,
+      department: meta.department,
+      version: def.currentVersion || def.versions[0].version,
+      active: def.active,
+      stages: parsed.stages || [],
+      branchConfigs: parsed.branchConfigs || [],
+      history: parsed.history || [],
+      draftStages,
+      activatedAt: def.versions[0].publishedAt,
+      activatedBy: def.versions[0].publishedBy
+    }
+  });
+};
+
+export const saveWorkflowDraft = async (req: AuthenticatedRequest, res: Response) => {
+  const { workflowId } = req.params;
+  const { stages } = req.body;
+  const meta = WORKFLOW_CONFIG_LIST.find(w => w.id === workflowId);
+  if (!meta) {
+    return res.status(404).json({ success: false, message: `Workflow configuration '${workflowId}' not found.` });
+  }
+
+  if (!Array.isArray(stages)) {
+    return res.status(400).json({ success: false, message: 'Stages array is required to save a draft.' });
+  }
+
+  const now = new Date().toISOString();
+  await prisma.workflowDefinition.upsert({
+    where: { id: workflowId },
+    update: {
+      draftJson: JSON.stringify(stages),
+      updatedAt: now
+    },
+    create: {
+      id: workflowId,
+      name: meta.name,
+      active: true,
+      currentVersion: 1,
+      draftJson: JSON.stringify(stages),
+      createdAt: now,
+      updatedAt: now
+    }
+  });
+
+  return res.json({
+    success: true,
+    message: `Draft saved successfully for ${meta.name}. Draft remains unpublished until activated.`
+  });
+};
+
+export const resetWorkflowDefault = async (req: AuthenticatedRequest, res: Response) => {
+  const { workflowId } = req.params;
+  const meta = WORKFLOW_CONFIG_LIST.find(w => w.id === workflowId);
+  if (!meta) {
+    return res.status(404).json({ success: false, message: `Workflow configuration '${workflowId}' not found.` });
+  }
+
+  const defaultWf = getDefaultWorkflowById(workflowId);
+
+  // Clear draft
+  await prisma.workflowDefinition.updateMany({
+    where: { id: workflowId },
+    data: { draftJson: null }
+  });
+
+  return res.json({
+    success: true,
+    stages: defaultWf.stages,
+    branchConfigs: (defaultWf as any).branchConfigs || [],
+    message: `Reset ${meta.name} stages to default configuration.`
+  });
+};
+
+export const validateWorkflowConfigEndpoint = async (req: AuthenticatedRequest, res: Response) => {
+  const { workflowId } = req.params;
+  const { name, stages, branchConfigs } = req.body;
+  const meta = WORKFLOW_CONFIG_LIST.find(w => w.id === workflowId);
+  if (!meta) {
+    return res.status(404).json({ success: false, message: `Workflow configuration '${workflowId}' not found.` });
+  }
+
   const roles = (await prisma.role.findMany({ select: { name: true } })).map(r => r.name);
+  let errors: string[] = [];
 
-  const validationPayload = {
-    name: name || 'General Approval Workflow',
-    stages: stages || [],
-    branchConfigs: branchConfigs || []
-  };
+  if (workflowId === 'workflow-general') {
+    errors = validateWorkflowConfig({ name: name || meta.name, stages, branchConfigs }, roles);
+    const stageRoles = (stages || []).map((s: any) => s.role);
+    if (!stageRoles.includes('CEO')) errors.push('Workflow must include CEO approval.');
+    if (stageRoles[stageRoles.length - 1] !== 'CHAIRMAN') errors.push('Chairman must remain the final authority stage.');
+  } else {
+    const deptRole = meta.department as 'IT' | 'AUDIT' | 'HR' | 'MMI';
+    errors = validateDepartmentWorkflowConfig({ name: name || meta.name, stages }, roles, deptRole);
+  }
 
-  const errors = validateWorkflowConfig(validationPayload, roles);
-  const stageRoles = (stages || []).map((s: any) => s.role);
-  if (!stageRoles.includes('CEO')) errors.push('Workflow must include CEO approval.');
-  if (stageRoles[stageRoles.length - 1] !== 'CHAIRMAN') errors.push('Chairman must remain the final authority stage.');
+  // Verify that all required roles have active users in the system
+  const activeUsers = await prisma.user.findMany({ where: { isActive: true }, select: { role: true } });
+  const userRoles = new Set(activeUsers.map(u => u.role));
+  for (const s of (stages || [])) {
+    if (s.role && !userRoles.has(s.role)) {
+      errors.push(`Approver role ${getRoleDisplayName(s.role)} does not have any active authorized users in the system.`);
+    }
+  }
+
+  return res.json({
+    success: errors.length === 0,
+    valid: errors.length === 0,
+    errors
+  });
+};
+
+export const activateWorkflowConfig = async (req: AuthenticatedRequest, res: Response) => {
+  const { workflowId } = req.params;
+  const { name, stages, branchConfigs, reason } = req.body;
+  const meta = WORKFLOW_CONFIG_LIST.find(w => w.id === workflowId);
+  if (!meta) {
+    return res.status(404).json({ success: false, message: `Workflow configuration '${workflowId}' not found.` });
+  }
+
+  const roles = (await prisma.role.findMany({ select: { name: true } })).map(r => r.name);
+  let errors: string[] = [];
+
+  if (workflowId === 'workflow-general') {
+    errors = validateWorkflowConfig({ name: name || meta.name, stages, branchConfigs }, roles);
+    const stageRoles = (stages || []).map((s: any) => s.role);
+    if (!stageRoles.includes('CEO')) errors.push('Workflow must include CEO approval.');
+    if (stageRoles[stageRoles.length - 1] !== 'CHAIRMAN') errors.push('Chairman must remain the final authority stage.');
+  } else {
+    const deptRole = meta.department as 'IT' | 'AUDIT' | 'HR' | 'MMI';
+    errors = validateDepartmentWorkflowConfig({ name: name || meta.name, stages }, roles, deptRole);
+  }
+
+  // Verify that all required roles have active users in the system
+  const activeUsers = await prisma.user.findMany({ where: { isActive: true }, select: { role: true } });
+  const userRoles = new Set(activeUsers.map(u => u.role));
+  for (const s of (stages || [])) {
+    if (s.role && !userRoles.has(s.role)) {
+      errors.push(`Approver role ${getRoleDisplayName(s.role)} does not have any active authorized users in the system.`);
+    }
+  }
 
   if (errors.length) {
-    return res.status(400).json({ success: false, errors });
+    return res.status(400).json({ success: false, errors, message: errors.join(' ') });
   }
 
   const existingDef = await prisma.workflowDefinition.findUnique({
-    where: { id: 'workflow-general' },
+    where: { id: workflowId },
     include: { versions: { orderBy: { version: 'desc' }, take: 1 } }
   });
 
@@ -674,34 +856,32 @@ export const activateGeneralWorkflow = async (req: AuthenticatedRequest, res: Re
   if (existingDef?.versions[0]?.stagesJson) {
     try {
       history = JSON.parse(existingDef.versions[0].stagesJson).history || [];
-    } catch {
-      // empty
-    }
+    } catch {}
   }
 
   history.push({
     version: newVersion,
     activatedAt: now,
     activatedBy: req.user!.name,
-    reason: reason || 'General workflow activated by executive authority'
+    reason: reason || `${meta.name} activated by executive authority`
   });
 
   const formattedStages = (stages || []).map((s: any, idx: number) => ({
-    id: s.id || `gw-${idx + 1}`,
+    id: s.id || `stg-${idx + 1}`,
     stageKey: s.stageKey || `STAGE_${s.role}`,
     role: s.role,
     label: s.label || getRoleDisplayName(s.role),
     stageOrder: idx + 1,
-    stageType: s.stageType || (s.role === 'DEAN' ? 'DEAN' : (s.role === 'CEO' || s.role === 'CHAIRMAN') ? 'POST_BRANCH' : 'PRE_DEAN'),
+    stageType: s.stageType || (s.role === 'DEAN' ? 'DEAN' : (s.role === 'CEO' || s.role === 'CHAIRMAN') ? 'POST_BRANCH' : (s.role === meta.department ? 'BRANCH' : 'PRE_DEAN')),
     isApplicable: s.isApplicable !== false
   }));
 
-  const formattedBranchConfigs = branchConfigs || [
+  const formattedBranchConfigs = branchConfigs || (workflowId === 'workflow-general' ? [
     { branchKey: 'IT', displayName: 'IT Branch', role: 'IT', isActive: true },
     { branchKey: 'AUDIT', displayName: 'Audit Branch', role: 'AUDIT', isActive: true },
     { branchKey: 'HR', displayName: 'HR Branch', role: 'HR', isActive: true },
     { branchKey: 'MMI', displayName: 'MMI Branch', role: 'MMI', isActive: true }
-  ];
+  ] : []);
 
   const stagesJson = JSON.stringify({
     stages: formattedStages,
@@ -711,18 +891,20 @@ export const activateGeneralWorkflow = async (req: AuthenticatedRequest, res: Re
 
   await withTransaction(async tx => {
     await tx.workflowDefinition.upsert({
-      where: { id: 'workflow-general' },
+      where: { id: workflowId },
       update: {
-        name: (name || 'General Approval Workflow').trim(),
+        name: (name || meta.name).trim(),
         active: true,
         currentVersion: newVersion,
+        draftJson: null,
         updatedAt: now
       },
       create: {
-        id: 'workflow-general',
-        name: (name || 'General Approval Workflow').trim(),
+        id: workflowId,
+        name: (name || meta.name).trim(),
         active: true,
         currentVersion: newVersion,
+        draftJson: null,
         createdAt: now,
         updatedAt: now
       }
@@ -730,11 +912,11 @@ export const activateGeneralWorkflow = async (req: AuthenticatedRequest, res: Re
 
     await tx.workflowVersion.create({
       data: {
-        id: `ver-workflow-general-${newVersion}`,
-        workflowId: 'workflow-general',
+        id: `ver-${workflowId}-${newVersion}`,
+        workflowId,
         version: newVersion,
-        name: `${name || 'General Approval Workflow'} v${newVersion}`,
-        description: reason || 'Activated workflow version',
+        name: `${(name || meta.name).trim()} v${newVersion}`,
+        description: reason || `Activated workflow version ${newVersion}`,
         isPublished: true,
         publishedAt: now,
         publishedBy: req.user!.name,
@@ -744,18 +926,32 @@ export const activateGeneralWorkflow = async (req: AuthenticatedRequest, res: Re
 
     await writeAuditEvent({
       ...auditActor(req),
-      action: `General workflow v${newVersion} activated`,
-      targetType: 'GeneralWorkflow',
-      targetId: 'workflow-general',
+      action: `${meta.name} v${newVersion} activated`,
+      targetType: 'WorkflowDefinition',
+      targetId: workflowId,
       metadata: { version: newVersion, activatedBy: req.user!.name, reason }
     }, tx);
   });
 
   return res.json({
     success: true,
-    generalWorkflow: {
-      id: 'workflow-general',
-      name: (name || 'General Approval Workflow').trim(),
+    workflow: {
+      id: workflowId,
+      name: (name || meta.name).trim(),
+      department: meta.department,
+      version: newVersion,
+      active: true,
+      stages: formattedStages,
+      branchConfigs: formattedBranchConfigs,
+      history,
+      draftStages: null,
+      activatedAt: now,
+      activatedBy: req.user!.name,
+      updatedAt: now
+    },
+    generalWorkflow: workflowId === 'workflow-general' ? {
+      id: workflowId,
+      name: (name || meta.name).trim(),
       version: newVersion,
       active: true,
       stages: formattedStages,
@@ -764,8 +960,18 @@ export const activateGeneralWorkflow = async (req: AuthenticatedRequest, res: Re
       activatedAt: now,
       activatedBy: req.user!.name,
       updatedAt: now
-    }
+    } : undefined
   });
+};
+
+export const getGeneralWorkflow = async (req: AuthenticatedRequest, res: Response) => {
+  req.params.workflowId = 'workflow-general';
+  return getWorkflowConfigById(req, res);
+};
+
+export const activateGeneralWorkflow = async (req: AuthenticatedRequest, res: Response) => {
+  req.params.workflowId = 'workflow-general';
+  return activateWorkflowConfig(req, res);
 };
 
 export const publishWorkflowVersion = async (req: AuthenticatedRequest, res: Response) => {

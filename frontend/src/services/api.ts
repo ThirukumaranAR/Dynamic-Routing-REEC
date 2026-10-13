@@ -13,7 +13,8 @@ export function canViewActiveQuery(request: ApprovalRequest, user: User): boolea
   return ownsRequest || authoredQuery;
 }
 
-export function formatCurrencyINR(amount: number): string {
+export function formatCurrencyINR(amount?: number | null): string {
+  if (amount === null || amount === undefined || !Number.isFinite(amount)) return 'No Cost';
   return new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 }).format(amount);
 }
 

@@ -7,7 +7,9 @@ import {
   RequestStageInstance,
   STANDARD_ROLES,
   User,
-  UserAccount
+  UserAccount,
+  WorkflowConfigSummary,
+  WorkflowConfigDetail
 } from '../services/types';
 import { api, ApiError } from '../services/apiClient';
 import { getRoleDisplayName, formatCurrencyINR } from '../services/api';
@@ -17,6 +19,14 @@ import {
   saveGeneralWorkflow,
   applyGeneralWorkflowToRequest
 } from '../services/workflowEngine';
+
+export const WORKFLOW_OPTIONS: { id: string; name: string; department: string | null; description: string }[] = [
+  { id: 'workflow-general', name: 'General Workflow', department: null, description: 'Default general multi-tier institutional approval workflow' },
+  { id: 'workflow-hr', name: 'HR Department Workflow', department: 'HR', description: 'Institutional approval route for HR Requests' },
+  { id: 'workflow-it', name: 'IT Department Workflow', department: 'IT', description: 'Institutional approval route for IT Requests' },
+  { id: 'workflow-audit', name: 'Audit Department Workflow', department: 'AUDIT', description: 'Institutional approval route for Audit Requests' },
+  { id: 'workflow-mmi', name: 'MMI Department Workflow', department: 'MMI', description: 'Institutional approval route for MMI Requests' }
+];
 
 const commonDepartments = [
   'Administration',
@@ -444,11 +454,53 @@ export const WorkflowManagementView: React.FC<WorkflowManagementViewProps> = ({
   const [activationError, setActivationError] = useState<string>('');
   const [activationSuccess, setActivationSuccess] = useState<string>('');
 
-  // General Workflow Configuration State
+  // Five Independent Workflow Configurations State
+  const [selectedWorkflowId, setSelectedWorkflowId] = useState<string>('workflow-general');
+  const [workflowConfigsList, setWorkflowConfigsList] = useState<WorkflowConfigSummary[]>([]);
+  const [currentWorkflowDetail, setCurrentWorkflowDetail] = useState<WorkflowConfigDetail | null>(null);
+  const [workflowLoading, setWorkflowLoading] = useState<boolean>(false);
+
+  // General Workflow Configuration State (Fallback/Legacy)
   const [generalWorkflow, setGeneralWorkflow] = useState<GeneralWorkflowConfig>(() => loadGeneralWorkflow());
   const [showGeneralPreviewModal, setShowGeneralPreviewModal] = useState<boolean>(false);
   const [generalActivationReason, setGeneralActivationReason] = useState<string>('');
   const [generalSaveSuccess, setGeneralSaveSuccess] = useState<string>('');
+
+  const loadWorkflowConfig = useCallback(async (wfId: string) => {
+    setWorkflowLoading(true);
+    setActivationError('');
+    setGeneralSaveSuccess('');
+    try {
+      const detail = await api.getWorkflowConfig(wfId);
+      setCurrentWorkflowDetail(detail);
+
+      const stagesToLoad = (detail.draftStages && detail.draftStages.length > 0)
+        ? detail.draftStages
+        : detail.stages;
+
+      const formattedStages: RequestStageInstance[] = (stagesToLoad || []).map((s: any, idx: number) => ({
+        id: s.id || `stg-${idx + 1}`,
+        stageIndex: idx,
+        stageKey: s.stageKey || `STAGE_${s.role}`,
+        role: s.role as any,
+        label: s.label || getRoleDisplayName(s.role),
+        status: 'FUTURE',
+        isApplicable: s.isApplicable !== false,
+        notes: null
+      }));
+
+      setDraftStages(formattedStages);
+      setInsertPosition(formattedStages.length);
+      if (detail.draftStages && detail.draftStages.length > 0) {
+        setGeneralSaveSuccess(`Loaded saved draft for ${detail.name}. Draft remains active until activated.`);
+        setTimeout(() => setGeneralSaveSuccess(''), 4000);
+      }
+    } catch (err: any) {
+      console.error('Failed to load workflow configuration:', err);
+    } finally {
+      setWorkflowLoading(false);
+    }
+  }, []);
 
   // Controlled Migration State (for in-progress requests)
   const [requestToMigrate, setRequestToMigrate] = useState<ApprovalRequest | null>(null);
@@ -483,23 +535,29 @@ export const WorkflowManagementView: React.FC<WorkflowManagementViewProps> = ({
     return () => { isMounted = false; };
   }, []);
 
-  // Fetch active general workflow on mount
+  // Fetch workflow config summaries and general workflow on mount
   useEffect(() => {
     let isMounted = true;
-    const fetchGeneralWorkflow = async () => {
-      try {
-        const gw = await api.getGeneralWorkflow();
-        if (isMounted && gw) {
-          setGeneralWorkflow(gw);
-          saveGeneralWorkflow(gw);
-        }
-      } catch {
-        // Fallback to local storage
+    api.listWorkflowConfigs().then(wfs => {
+      if (isMounted) setWorkflowConfigsList(wfs);
+    }).catch(() => {});
+
+    api.getGeneralWorkflow().then(gw => {
+      if (isMounted && gw) {
+        setGeneralWorkflow(gw);
+        saveGeneralWorkflow(gw);
       }
-    };
-    void fetchGeneralWorkflow();
+    }).catch(() => {});
+
     return () => { isMounted = false; };
   }, []);
+
+  // Sync workflow canvas when selectedWorkflowId changes while in GENERAL_BUILDER
+  useEffect(() => {
+    if (viewMode === 'GENERAL_BUILDER') {
+      void loadWorkflowConfig(selectedWorkflowId);
+    }
+  }, [selectedWorkflowId, viewMode, loadWorkflowConfig]);
 
   // Update selected request when selectedRequestId or requestsList changes
   useEffect(() => {
@@ -598,46 +656,51 @@ export const WorkflowManagementView: React.FC<WorkflowManagementViewProps> = ({
     setViewMode('GENERAL_BUILDER');
   };
 
-  const handleOpenGeneralWorkflowEditor = () => {
+  const handleOpenGeneralWorkflowEditor = (wfId?: string) => {
     setSelectedRequestId('');
     setSelectedRequest(null);
-    const stages: RequestStageInstance[] = (generalWorkflow.stages || []).map((s, idx) => ({
-      id: s.id || `gw-${idx + 1}`,
-      stageIndex: idx,
-      stageKey: s.stageKey || `STAGE_${s.role}`,
-      role: s.role as any,
-      label: s.label || getRoleDisplayName(s.role),
-      status: 'FUTURE',
-      isApplicable: s.isApplicable !== false,
-      notes: null
-    }));
-    setDraftStages(stages);
-    setDraftBranch('HR');
-    setInsertPosition(stages.length);
-    setInsertRole('');
-    setRoleValidationError('');
-    setActivationError('');
-    setActivationSuccess('');
-    setGeneralSaveSuccess('');
+    const targetId = wfId || selectedWorkflowId;
+    setSelectedWorkflowId(targetId);
     setViewMode('GENERAL_BUILDER');
+    void loadWorkflowConfig(targetId);
   };
 
-  const handleSaveGeneralDraft = () => {
-    const draftConfig: GeneralWorkflowConfig = {
-      ...generalWorkflow,
-      stages: draftStages.map((s, idx) => ({
-        id: s.id,
-        stageKey: s.stageKey,
-        role: s.role,
-        label: s.label,
-        stageOrder: idx + 1,
-        stageType: s.role === 'DEAN' ? 'DEAN' : (s.role === 'CEO' || s.role === 'CHAIRMAN') ? 'POST_BRANCH' : 'PRE_DEAN',
-        isApplicable: s.isApplicable !== false
-      }))
-    };
-    saveGeneralWorkflow(draftConfig);
-    setGeneralSaveSuccess('Draft workflow saved.');
-    setTimeout(() => setGeneralSaveSuccess(''), 3000);
+  const handleSaveGeneralDraft = async () => {
+    try {
+      await api.saveWorkflowDraft(selectedWorkflowId, draftStages);
+      setGeneralSaveSuccess(`Draft workflow saved successfully for ${currentWorkflowDetail?.name || 'selected workflow'}.`);
+      setTimeout(() => setGeneralSaveSuccess(''), 4000);
+    } catch (err: any) {
+      alert(err?.message || 'Failed to save workflow draft.');
+    }
+  };
+
+  const handleResetWorkflowDefault = async () => {
+    const wfName = currentWorkflowDetail?.name || 'workflow';
+    if (!window.confirm(`Reset ${wfName} stages to default sequence? Any unsaved draft changes will be discarded.`)) {
+      return;
+    }
+    try {
+      const res = await api.resetWorkflowDefault(selectedWorkflowId);
+      if (res.stages) {
+        const resetStages: RequestStageInstance[] = res.stages.map((s: any, idx: number) => ({
+          id: s.id || `stg-${idx + 1}`,
+          stageIndex: idx,
+          stageKey: s.stageKey || `STAGE_${s.role}`,
+          role: s.role as any,
+          label: s.label || getRoleDisplayName(s.role),
+          status: 'FUTURE',
+          isApplicable: s.isApplicable !== false,
+          notes: null
+        }));
+        setDraftStages(resetStages);
+        setInsertPosition(resetStages.length);
+        setGeneralSaveSuccess(res.message || 'Workflow reset to default sequence.');
+        setTimeout(() => setGeneralSaveSuccess(''), 4000);
+      }
+    } catch (err: any) {
+      alert(err?.message || 'Failed to reset workflow.');
+    }
   };
 
   const validateWorkflowSequence = (stages: RequestStageInstance[]): string | null => {
@@ -656,9 +719,51 @@ export const WorkflowManagementView: React.FC<WorkflowManagementViewProps> = ({
       seen.add(r);
     }
 
-    const chairIdx = roles.indexOf('CHAIRMAN');
+    const opt = WORKFLOW_OPTIONS.find(w => w.id === selectedWorkflowId);
+    const deptRole = opt?.department as string | null;
+
+    if (selectedWorkflowId === 'workflow-general') {
+      const chairIdx = roles.indexOf('CHAIRMAN');
+      if (chairIdx !== -1 && chairIdx !== roles.length - 1) {
+        return 'Chairman must remain the final approval authority stage when included in workflow.';
+      }
+      return null;
+    }
+
+    // Departmental workflow validation
+    const requiredRoles = ['INSTITUTION_MANAGER', 'FINANCE', 'ACCOUNTANT', 'VP', 'HOI', 'DEAN', 'CEO', 'CHAIRMAN'];
+    if (deptRole) requiredRoles.splice(6, 0, deptRole.toUpperCase());
+
+    for (const reqRole of requiredRoles) {
+      if (!roles.includes(reqRole)) {
+        return `Workflow must include mandatory role: ${getRoleDisplayName(reqRole)}.`;
+      }
+    }
+
+    const imIdx = roles.indexOf('INSTITUTION_MANAGER');
+    const finIdx = roles.indexOf('FINANCE');
+    const accIdx = roles.indexOf('ACCOUNTANT');
+    const vpIdx = roles.indexOf('VP');
+    const hoiIdx = roles.indexOf('HOI');
+    const deanIdx = roles.indexOf('DEAN');
+    const targetDeptIdx = deptRole ? roles.indexOf(deptRole.toUpperCase()) : -1;
+    const ceoIdx = roles.indexOf('CEO');
+    const chairIdx = roles.lastIndexOf('CHAIRMAN');
+
+    if (imIdx !== -1 && finIdx !== -1 && imIdx >= finIdx) return 'Institution Manager must precede Finance.';
+    if (finIdx !== -1 && accIdx !== -1 && finIdx >= accIdx) return 'Finance must precede Accountant.';
+    if (accIdx !== -1 && vpIdx !== -1 && accIdx >= vpIdx) return 'Accountant must precede VP.';
+    if (vpIdx !== -1 && hoiIdx !== -1 && vpIdx >= hoiIdx) return 'VP must precede HOI.';
+    if (hoiIdx !== -1 && deanIdx !== -1 && hoiIdx >= deanIdx) return 'HOI must precede Dean.';
+    if (deptRole && deanIdx !== -1 && targetDeptIdx !== -1 && deanIdx >= targetDeptIdx) {
+      return `Dean must precede ${deptRole} Branch.`;
+    }
+    if (deptRole && targetDeptIdx !== -1 && ceoIdx !== -1 && targetDeptIdx >= ceoIdx) {
+      return `${deptRole} Branch must precede CEO.`;
+    }
+    if (ceoIdx !== -1 && chairIdx !== -1 && ceoIdx >= chairIdx) return 'CEO must precede Chairman.';
     if (chairIdx !== -1 && chairIdx !== roles.length - 1) {
-      return 'Chairman must remain the final approval authority stage when included in workflow.';
+      return 'Chairman must remain the final approval authority stage.';
     }
 
     return null;
@@ -682,8 +787,9 @@ export const WorkflowManagementView: React.FC<WorkflowManagementViewProps> = ({
     setActivationError('');
 
     try {
+      const opt = WORKFLOW_OPTIONS.find(w => w.id === selectedWorkflowId);
       const payload = {
-        name: generalWorkflow.name || 'General Approval Workflow',
+        name: currentWorkflowDetail?.name || opt?.name || 'Approval Workflow',
         reason: generalActivationReason.trim() || undefined,
         stages: draftStages.map((s, idx) => ({
           id: s.id,
@@ -691,44 +797,24 @@ export const WorkflowManagementView: React.FC<WorkflowManagementViewProps> = ({
           role: s.role,
           label: s.label,
           stageOrder: idx + 1,
-          stageType: s.role === 'DEAN' ? 'DEAN' : (s.role === 'CEO' || s.role === 'CHAIRMAN') ? 'POST_BRANCH' : 'PRE_DEAN',
+          stageType: s.role === 'DEAN' ? 'DEAN' : (s.role === 'CEO' || s.role === 'CHAIRMAN') ? 'POST_BRANCH' : (s.role === opt?.department ? 'BRANCH' : 'PRE_DEAN'),
           isApplicable: s.isApplicable !== false
         })),
-        branchConfigs: generalWorkflow.branchConfigs || [
-          { branchKey: 'IT', displayName: 'IT Branch', role: 'IT', isActive: true },
-          { branchKey: 'AUDIT', displayName: 'Audit Branch', role: 'AUDIT', isActive: true },
-          { branchKey: 'HR', displayName: 'HR Branch', role: 'HR', isActive: true },
-          { branchKey: 'MMI', displayName: 'MMI Branch', role: 'MMI', isActive: true }
-        ]
+        branchConfigs: currentWorkflowDetail?.branchConfigs || generalWorkflow.branchConfigs
       };
 
-      let updatedConfig: GeneralWorkflowConfig;
-      try {
-        updatedConfig = await api.activateGeneralWorkflow(payload);
-      } catch {
-        const nextVersion = (generalWorkflow.version || 1) + 1;
-        const now = new Date().toISOString();
-        updatedConfig = {
-          ...generalWorkflow,
-          version: nextVersion,
-          activatedAt: now,
-          activatedBy: user.name,
-          stages: payload.stages,
-          history: [
-            ...(generalWorkflow.history || []),
-            { version: nextVersion, activatedAt: now, activatedBy: user.name, reason: generalActivationReason }
-          ]
-        };
+      const activated = await api.activateWorkflowConfig(selectedWorkflowId, payload);
+      setCurrentWorkflowDetail(activated);
+      if (selectedWorkflowId === 'workflow-general') {
+        setGeneralWorkflow(activated as any);
+        saveGeneralWorkflow(activated as any);
       }
-
-      setGeneralWorkflow(updatedConfig);
-      saveGeneralWorkflow(updatedConfig);
       setShowGeneralPreviewModal(false);
-      setActivationSuccess(`General Workflow v${updatedConfig.version} activated successfully! New requests will use this default flow.`);
+      setActivationSuccess(`${activated.name} v${activated.version} activated successfully! New requests will use this flow.`);
       setTimeout(() => setActivationSuccess(''), 5000);
-      setViewMode('LIST');
+      void loadWorkflowConfig(selectedWorkflowId);
     } catch (err: any) {
-      setActivationError(err?.message || 'Failed to activate general workflow.');
+      setActivationError(err?.message || 'Failed to activate workflow.');
     } finally {
       setActivating(false);
     }
@@ -1508,15 +1594,15 @@ export const WorkflowManagementView: React.FC<WorkflowManagementViewProps> = ({
 
               <button
                 type="button"
-                onClick={handleOpenGeneralWorkflowEditor}
+                onClick={() => handleOpenGeneralWorkflowEditor()}
                 className="inline-flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold text-xs px-3.5 py-2 rounded-lg shadow-2xs transition cursor-pointer"
-                title="Configure the default workflow for future requests"
+                title="Configure institutional approval workflows"
               >
                 <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
                 </svg>
-                <span>Manage General Flow</span>
+                <span>Manage Workflows</span>
               </button>
             </div>
           )}
@@ -2358,20 +2444,45 @@ export const WorkflowManagementView: React.FC<WorkflowManagementViewProps> = ({
             </div>
           )}
 
-          {/* Top Bar */}
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-200 pb-4">
-            <div>
-              <h3 className="text-base font-bold text-slate-900">
-                {draftStages.length === 0 ? 'Create New General Flow' : 'Manage General Flow'}
-              </h3>
-              <p className="text-xs text-slate-500 mt-0.5">
-                {draftStages.length === 0
-                  ? 'Drag and drop roles from the left palette down to build a brand new approval flow from scratch.'
-                  : `Configure default approval sequence for future requests. Active: v${generalWorkflow.version}`}
-              </p>
+          {/* Top Bar with Workflow Configuration Selector */}
+          <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 border-b border-slate-200 pb-4">
+            <div className="flex flex-col sm:flex-row sm:items-center gap-4">
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <label htmlFor="workflow-selector" className="block text-[10px] font-bold uppercase tracking-wider text-slate-500">
+                    Active Workflow Configuration:
+                  </label>
+                  {workflowLoading && <span className="text-[10px] text-indigo-600 font-semibold animate-pulse">Loading…</span>}
+                </div>
+                <select
+                  id="workflow-selector"
+                  value={selectedWorkflowId}
+                  onChange={e => setSelectedWorkflowId(e.target.value)}
+                  className="bg-white border-2 border-indigo-200 hover:border-indigo-400 focus:border-indigo-600 rounded-lg px-3 py-1.5 text-xs font-bold text-indigo-950 focus:outline-none cursor-pointer shadow-xs min-w-[220px]"
+                >
+                  {(workflowConfigsList.length > 0 ? workflowConfigsList : WORKFLOW_OPTIONS).map(opt => (
+                    <option key={opt.id} value={opt.id}>
+                      {opt.name} {opt.department ? `(${opt.department})` : ''}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <h3 className="text-base font-bold text-slate-900">
+                  {draftStages.length === 0
+                    ? `Create New Flow — ${currentWorkflowDetail?.name || 'Selected Workflow'}`
+                    : (currentWorkflowDetail?.name || 'Manage Workflow')}
+                </h3>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  {draftStages.length === 0
+                    ? 'Drag and drop roles from the left palette down to build a brand new approval flow from scratch.'
+                    : `${currentWorkflowDetail?.description || 'Approval sequence configuration'}. Active: v${currentWorkflowDetail?.version || 1}`}
+                </p>
+              </div>
             </div>
 
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 flex-wrap">
               <button
                 type="button"
                 onClick={() => setDraftStages([])}
@@ -2381,11 +2492,11 @@ export const WorkflowManagementView: React.FC<WorkflowManagementViewProps> = ({
                 <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
                 </svg>
-                <span>+ Create New Flow (Empty Canvas)</span>
+                <span>+ Create New Flow</span>
               </button>
               <button
                 type="button"
-                onClick={handleOpenGeneralWorkflowEditor}
+                onClick={handleResetWorkflowDefault}
                 className="text-xs text-slate-700 hover:text-slate-900 font-medium px-3 py-1.5 rounded-lg border border-slate-200 hover:bg-slate-50 transition cursor-pointer"
                 title="Reset stages to default sequence"
               >
@@ -2839,8 +2950,10 @@ export const WorkflowManagementView: React.FC<WorkflowManagementViewProps> = ({
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] flex flex-col overflow-hidden border border-slate-200">
             <div className="px-6 py-4 bg-slate-900 text-white flex items-center justify-between">
               <div>
-                <h3 className="text-base font-bold text-white">Activate General Workflow v{(generalWorkflow.version || 1) + 1}</h3>
-                <p className="text-xs text-slate-400">Default workflow for future submitted requests</p>
+                <h3 className="text-base font-bold text-white">Activate {currentWorkflowDetail?.name || 'Workflow'} v{((currentWorkflowDetail?.version || 1) + 1)}</h3>
+                <p className="text-xs text-slate-400">
+                  {currentWorkflowDetail?.department ? `Dedicated workflow for ${currentWorkflowDetail.department} Requests` : 'Default multi-tier workflow for future submitted requests'}
+                </p>
               </div>
               <button
                 type="button"
@@ -2862,10 +2975,10 @@ export const WorkflowManagementView: React.FC<WorkflowManagementViewProps> = ({
               <div className="grid grid-cols-2 gap-4 bg-slate-50 p-4 rounded-xl border border-slate-200 text-xs">
                 <div>
                   <h5 className="font-bold text-slate-500 uppercase tracking-wide text-[10px] mb-2">
-                    Current Active (v{generalWorkflow.version})
+                    Current Active (v{currentWorkflowDetail?.version || generalWorkflow.version || 1})
                   </h5>
                   <ol className="list-decimal pl-4 space-y-1 text-slate-600 font-medium">
-                    {(generalWorkflow.stages || []).map((s, idx) => (
+                    {((currentWorkflowDetail?.stages || generalWorkflow.stages) || []).map((s, idx) => (
                       <li key={idx}>
                         {s.label || getRoleDisplayName(s.role)}
                       </li>
@@ -2875,7 +2988,7 @@ export const WorkflowManagementView: React.FC<WorkflowManagementViewProps> = ({
 
                 <div>
                   <h5 className="font-bold text-indigo-700 uppercase tracking-wide text-[10px] mb-2">
-                    Proposed Default (v{(generalWorkflow.version || 1) + 1})
+                    Proposed Configuration (v{((currentWorkflowDetail?.version || generalWorkflow.version || 1) + 1)})
                   </h5>
                   <ol className="list-decimal pl-4 space-y-1 text-slate-800 font-bold">
                     {draftStages.map((s, idx) => (
@@ -2929,7 +3042,7 @@ export const WorkflowManagementView: React.FC<WorkflowManagementViewProps> = ({
                     Activating Workflow…
                   </>
                 ) : (
-                  'Confirm and Activate v' + ((generalWorkflow.version || 1) + 1)
+                  'Confirm and Activate v' + (((currentWorkflowDetail?.version || generalWorkflow.version || 1) + 1))
                 )}
               </button>
             </div>

@@ -100,7 +100,7 @@ const mapPrismaRequest = (r) => {
         id: r.id,
         title: r.title,
         department: r.department,
-        amount: Number(r.amount),
+        amount: r.amount !== null && r.amount !== undefined ? Number(r.amount) : null,
         date: r.date,
         status: r.status,
         category: r.category,
@@ -341,6 +341,20 @@ const getRequestById = async (req, res) => {
     return res.json({ success: true, request: requestForViewer(request, req.user) });
 };
 exports.getRequestById = getRequestById;
+const normalizeRequestType = (raw) => {
+    if (!raw)
+        return 'IT Request';
+    const s = String(raw).trim();
+    if (/^it(\s+request)?$/i.test(s))
+        return 'IT Request';
+    if (/^audit(\s+request)?$/i.test(s))
+        return 'Audit Request';
+    if (/^hr(\s+request)?$/i.test(s))
+        return 'HR Request';
+    if (/^mmi(\s+request)?$/i.test(s))
+        return 'MMI Request';
+    return s;
+};
 const createRequest = async (req, res) => {
     const user = req.user;
     if (!user || user.isActive === false)
@@ -357,10 +371,23 @@ const createRequest = async (req, res) => {
         return res.status(403).json({ success: false, message: `Role ${user.role} is not permitted to create requests` });
     }
     const { title, category, requestType, amount, description, purpose, requestDetails, attachments } = req.body;
-    const numericAmount = Number(amount);
-    if (typeof title !== 'string' || !title.trim() || !Number.isFinite(numericAmount) || numericAmount < 0 || !validCategories.includes(category)) {
-        return res.status(400).json({ success: false, message: 'A title, valid request category, and non-negative amount are required' });
+    // Resolve Request Type: IT Request | Audit Request | HR Request | MMI Request (or legacy category)
+    const canonicalRequestType = normalizeRequestType(requestType || category);
+    // Cost / Amount is strictly optional. If provided, validate as non-negative number.
+    let numericAmount = null;
+    if (amount !== undefined && amount !== null && String(amount).trim() !== '') {
+        const parsed = Number(amount);
+        if (!Number.isFinite(parsed) || parsed < 0) {
+            return res.status(400).json({ success: false, message: 'Cost must be a valid non-negative number if specified' });
+        }
+        numericAmount = parsed;
     }
+    if (typeof title !== 'string' || !title.trim()) {
+        return res.status(400).json({ success: false, message: 'A request title is required' });
+    }
+    const validCategory = (category && validCategories.includes(category))
+        ? category
+        : 'Purchase';
     const safeDescription = (typeof description === 'string' && description.trim()) || (typeof purpose === 'string' && purpose.trim()) || '';
     if (!safeDescription)
         return res.status(400).json({ success: false, message: 'Purpose and description are required' });
@@ -371,6 +398,41 @@ const createRequest = async (req, res) => {
     const activeWorkflows = await db_1.prisma.workflowDefinition.findMany({ where: { active: true } });
     if (!activeWorkflows.length)
         return res.status(409).json({ success: false, message: 'No active approval workflow is available' });
+    // Resolve target workflow definition for the selected request type
+    const targetWorkflowId = (0, workflowService_1.resolveWorkflowIdForRequestType)(canonicalRequestType);
+    const targetDef = await db_1.prisma.workflowDefinition.findUnique({
+        where: { id: targetWorkflowId },
+        include: { versions: { orderBy: { version: 'desc' }, take: 1 } }
+    });
+    let resolvedWorkflow = (0, workflowService_1.getDefaultWorkflowById)(targetWorkflowId);
+    if (targetDef?.versions[0]?.stagesJson) {
+        try {
+            const parsed = JSON.parse(targetDef.versions[0].stagesJson);
+            resolvedWorkflow = {
+                id: targetDef.id,
+                name: targetDef.name,
+                version: targetDef.currentVersion,
+                stages: parsed.stages || [],
+                branchConfigs: parsed.branchConfigs || [],
+                history: parsed.history || [],
+                active: true,
+                activatedAt: targetDef.versions[0].publishedAt,
+                activatedBy: targetDef.versions[0].publishedBy
+            };
+        }
+        catch { }
+    }
+    // Verify that all active approvers in the workflow stages exist and are active in the system
+    const activeUsers = await db_1.prisma.user.findMany({ where: { isActive: true }, select: { role: true } });
+    const userRoles = new Set(activeUsers.map(u => u.role));
+    const stagesToVerify = (resolvedWorkflow.stages || []).filter((s) => s.isApplicable !== false);
+    const missingRoles = stagesToVerify.filter((s) => s.role && !userRoles.has(s.role));
+    if (missingRoles.length > 0) {
+        return res.status(400).json({
+            success: false,
+            message: `Workflow cannot be initiated: missing active authorized approver for role(s): ${missingRoles.map((s) => s.role).join(', ')}`
+        });
+    }
     const generalDef = await db_1.prisma.workflowDefinition.findUnique({
         where: { id: 'workflow-general' },
         include: { versions: { orderBy: { version: 'desc' }, take: 1 } }
@@ -391,9 +453,7 @@ const createRequest = async (req, res) => {
                 activatedBy: generalDef.versions[0].publishedBy
             };
         }
-        catch {
-            // fallback to default
-        }
+        catch { }
     }
     const ts = timestamp();
     const reqId = `REQ-${(0, node_crypto_1.randomUUID)().slice(0, 8).toUpperCase()}`;
@@ -404,9 +464,9 @@ const createRequest = async (req, res) => {
         amount: numericAmount,
         date: formatDate(),
         status: 'PENDING',
-        currentStage: 'MANAGER',
-        category,
-        requestType: requestType || category,
+        currentStage: 'INSTITUTION_MANAGER',
+        category: validCategory,
+        requestType: canonicalRequestType,
         requester: user.name,
         requesterId: user.id,
         requesterEmail: user.email,
@@ -424,19 +484,19 @@ const createRequest = async (req, res) => {
             dataUrl: file.dataUrl
         })),
         auditTrail: [
-            { ts, actor: user.name, action: `Request submitted with ${safeAttachments.length} attachment(s)` },
+            { ts, actor: user.name, action: `Request submitted (${canonicalRequestType}) with ${safeAttachments.length} attachment(s)` },
             { ts, actor: 'System', action: 'Assigned for approval workflow' }
         ],
         createdAt: ts,
         updatedAt: ts
-    }, activeWorkflows, generalWorkflow);
+    }, activeWorkflows, generalWorkflow, resolvedWorkflow);
     await (0, db_1.withTransaction)(async (tx) => {
         await tx.approvalRequest.create({
             data: {
                 id: request.id,
                 title: request.title,
                 department: request.department,
-                amount: request.amount,
+                amount: request.amount ?? null,
                 date: request.date,
                 status: request.status,
                 category: request.category,
@@ -606,9 +666,12 @@ const respondToQuery = async (req, res) => {
                 throw new Error('Only the owner of an active query can respond');
             }
             const message = { id: (0, node_crypto_1.randomUUID)(), authorId: req.user.id, authorName: req.user.name, authorRole: req.user.role, kind: 'RESPONSE', text, ts };
-            const revisedAmount = req.body.amount === undefined ? current.amount : Number(req.body.amount);
-            if (!Number.isFinite(revisedAmount) || revisedAmount < 0)
+            const revisedAmount = req.body.amount === undefined
+                ? current.amount
+                : (req.body.amount === null || req.body.amount === '' ? null : Number(req.body.amount));
+            if (revisedAmount !== null && revisedAmount !== undefined && (!Number.isFinite(revisedAmount) || revisedAmount < 0)) {
                 throw new Error('Revised amount must be non-negative');
+            }
             const resumed = {
                 ...current,
                 title: typeof req.body.title === 'string' && req.body.title.trim() ? req.body.title.trim() : current.title,

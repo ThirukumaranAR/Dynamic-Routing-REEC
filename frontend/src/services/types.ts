@@ -82,6 +82,16 @@ export type UserAccount = User & { password?: string };
 export type RequestStatus = 'PENDING' | 'APPROVED' | 'REJECTED' | 'QUERIED' | 'ESCALATED' | 'COMPLETED';
 
 export type RequestCategory = 'Leave' | 'Permission' | 'Purchase' | 'Travel' | 'Equipment' | 'Reimbursement' | 'Work From Home' | 'Other';
+export const REQUEST_CATEGORIES: RequestCategory[] = [
+  'Leave',
+  'Permission',
+  'Purchase',
+  'Travel',
+  'Equipment',
+  'Reimbursement',
+  'Work From Home',
+  'Other'
+];
 
 export interface AuditEntry {
   ts: string;
@@ -234,16 +244,70 @@ export interface RequestAttachment {
   dataUrl?: string;
 }
 
+export type OfficialRequestType = 'IT Request' | 'Audit Request' | 'HR Request' | 'MMI Request';
+export const OFFICIAL_REQUEST_TYPES: OfficialRequestType[] = [
+  'IT Request',
+  'Audit Request',
+  'HR Request',
+  'MMI Request'
+];
+
+export interface WorkflowConfigSummary {
+  id: string;
+  name: string;
+  department: string | null;
+  description: string;
+  version: number;
+  active: boolean;
+  hasDraft: boolean;
+  stageCount: number;
+  updatedAt: string;
+}
+
+export interface WorkflowConfigDetail {
+  id: string;
+  name: string;
+  department: string | null;
+  description?: string;
+  version: number;
+  active: boolean;
+  stages: Array<{
+    id: string;
+    stageKey: string;
+    role: string;
+    label: string;
+    stageOrder: number;
+    stageType?: string;
+    isApplicable: boolean;
+  }>;
+  branchConfigs?: Array<{
+    branchKey: PostDeanBranch;
+    displayName: string;
+    role: string;
+    isActive: boolean;
+  }>;
+  history?: Array<{
+    version: number;
+    activatedAt: string;
+    activatedBy: string;
+    reason?: string;
+  }>;
+  draftStages?: Array<any> | null;
+  activatedAt?: string;
+  activatedBy?: string;
+  updatedAt?: string;
+}
+
 export interface ApprovalRequest {
   id: string;
   title: string;
   department: string;
   purpose?: string;
-  amount: number;
+  amount: number | null;
   date: string;
   status: RequestStatus;
   category: RequestCategory;
-  requestType?: RequestCategory;
+  requestType?: string | null;
   requester: string;
   requesterId?: string;
   requesterEmail?: string;

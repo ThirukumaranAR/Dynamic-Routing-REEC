@@ -46,6 +46,7 @@ model WorkflowDefinition {
   name           String
   active         Boolean           @default(true)
   currentVersion Int               @default(1)
+  draftJson      String?           @db.LongText
   createdAt      String
   updatedAt      String
   versions       WorkflowVersion[]
@@ -108,7 +109,7 @@ model ApprovalRequest {
   id                    String                   @id
   title                 String
   department            String
-  amount                Decimal                  @db.Decimal(15, 2)
+  amount                Decimal?                 @db.Decimal(15, 2)
   date                  String
   status                String
   category              String

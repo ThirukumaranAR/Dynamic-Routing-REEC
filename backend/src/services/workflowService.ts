@@ -210,9 +210,159 @@ export const createRequestStageInstances = (workflowVersion: any, branch: string
   return { stages, initialStage };
 };
 
+export interface WorkflowConfigMetadata {
+  id: string;
+  name: string;
+  department: string | null;
+  description: string;
+}
+
+export const WORKFLOW_CONFIG_LIST: WorkflowConfigMetadata[] = [
+  { id: 'workflow-general', name: 'General Workflow', department: null, description: 'Default general multi-tier institutional approval workflow' },
+  { id: 'workflow-hr', name: 'HR Department Workflow', department: 'HR', description: 'Institutional approval route for HR Requests' },
+  { id: 'workflow-it', name: 'IT Department Workflow', department: 'IT', description: 'Institutional approval route for IT Requests' },
+  { id: 'workflow-audit', name: 'Audit Department Workflow', department: 'AUDIT', description: 'Institutional approval route for Audit Requests' },
+  { id: 'workflow-mmi', name: 'MMI Department Workflow', department: 'MMI', description: 'Institutional approval route for MMI Requests' }
+];
+
+export const getDefaultStagesForDepartment = (deptRole: 'IT' | 'AUDIT' | 'HR' | 'MMI') => [
+  { id: `stg-${deptRole}-1`, stageKey: 'STAGE_IM', role: 'INSTITUTION_MANAGER', label: 'Institution Manager', stageOrder: 1, stageType: 'PRE_DEAN', isApplicable: true },
+  { id: `stg-${deptRole}-2`, stageKey: 'STAGE_FINANCE', role: 'FINANCE', label: 'Finance Head', stageOrder: 2, stageType: 'PRE_DEAN', isApplicable: true },
+  { id: `stg-${deptRole}-3`, stageKey: 'STAGE_ACCOUNTANT', role: 'ACCOUNTANT', label: 'Accountant', stageOrder: 3, stageType: 'PRE_DEAN', isApplicable: true },
+  { id: `stg-${deptRole}-4`, stageKey: 'STAGE_VP', role: 'VP', label: 'Vice President', stageOrder: 4, stageType: 'PRE_DEAN', isApplicable: true },
+  { id: `stg-${deptRole}-5`, stageKey: 'STAGE_HOI', role: 'HOI', label: 'Head of Institution', stageOrder: 5, stageType: 'PRE_DEAN', isApplicable: true },
+  { id: `stg-${deptRole}-6`, stageKey: 'STAGE_DEAN', role: 'DEAN', label: 'Dean Checkpoint', stageOrder: 6, stageType: 'DEAN', isApplicable: true },
+  { id: `stg-${deptRole}-7`, stageKey: `STAGE_${deptRole}`, role: deptRole, label: `${deptRole} Branch Head`, stageOrder: 7, stageType: 'BRANCH', isApplicable: true },
+  { id: `stg-${deptRole}-8`, stageKey: 'STAGE_CEO', role: 'CEO', label: 'Chief Executive Officer', stageOrder: 8, stageType: 'POST_BRANCH', isApplicable: true },
+  { id: `stg-${deptRole}-9`, stageKey: 'STAGE_CHAIRMAN', role: 'CHAIRMAN', label: 'Chairman', stageOrder: 9, stageType: 'POST_BRANCH', isApplicable: true }
+];
+
+export const resolveWorkflowIdForRequestType = (requestType?: string | null): string => {
+  const norm = String(requestType || '').trim();
+  if (/^it(\s+request)?$/i.test(norm)) return 'workflow-it';
+  if (/^audit(\s+request)?$/i.test(norm)) return 'workflow-audit';
+  if (/^hr(\s+request)?$/i.test(norm)) return 'workflow-hr';
+  if (/^mmi(\s+request)?$/i.test(norm)) return 'workflow-mmi';
+  return 'workflow-general';
+};
+
+export const getDepartmentRoleForRequestType = (requestType?: string | null): string | null => {
+  const norm = String(requestType || '').trim();
+  if (/^it(\s+request)?$/i.test(norm)) return 'IT';
+  if (/^audit(\s+request)?$/i.test(norm)) return 'AUDIT';
+  if (/^hr(\s+request)?$/i.test(norm)) return 'HR';
+  if (/^mmi(\s+request)?$/i.test(norm)) return 'MMI';
+  return null;
+};
+
+export const getDefaultDepartmentWorkflow = (deptRole: 'IT' | 'AUDIT' | 'HR' | 'MMI') => {
+  const meta = WORKFLOW_CONFIG_LIST.find(w => w.department === deptRole);
+  const id = meta?.id || `workflow-${deptRole.toLowerCase()}`;
+  const name = meta?.name || `${deptRole} Department Workflow`;
+  return {
+    id,
+    name,
+    version: 1,
+    active: true,
+    activatedAt: new Date(0).toISOString(),
+    activatedBy: 'System',
+    stages: getDefaultStagesForDepartment(deptRole),
+    branchConfigs: [],
+    history: [
+      { version: 1, activatedAt: new Date(0).toISOString(), activatedBy: 'System', reason: `Initial default configuration for ${name}` }
+    ]
+  };
+};
+
+export const getDefaultWorkflowById = (id: string) => {
+  if (id === 'workflow-hr') return getDefaultDepartmentWorkflow('HR');
+  if (id === 'workflow-it') return getDefaultDepartmentWorkflow('IT');
+  if (id === 'workflow-audit') return getDefaultDepartmentWorkflow('AUDIT');
+  if (id === 'workflow-mmi') return getDefaultDepartmentWorkflow('MMI');
+  return getDefaultGeneralWorkflow();
+};
+
+export const validateDepartmentWorkflowConfig = (payload: any, roles: string[], deptRole?: string): string[] => {
+  const errors: string[] = [];
+  const normalizedRoles = new Set(roles.map(r => r.trim().toUpperCase()));
+  if (!payload || !payload.name?.trim()) {
+    errors.push('Workflow name is required.');
+  }
+  const stages = payload?.stages || [];
+  if (!Array.isArray(stages) || stages.length < 9) {
+    errors.push('Workflow must contain all required stages (at least 9 stages).');
+  }
+
+  const stageRoles = stages.map((s: any) => String(s.role || '').trim().toUpperCase());
+
+  // Check duplicate roles
+  const seenRoles = new Set<string>();
+  for (const r of stageRoles) {
+    if (seenRoles.has(r)) {
+      errors.push(`Duplicate approval stage: ${r}`);
+    }
+    seenRoles.add(r);
+  }
+
+  // Check valid roles
+  for (const r of stageRoles) {
+    if (!normalizedRoles.has(r)) {
+      errors.push(`Unknown approval role: ${r}.`);
+    }
+  }
+
+  // Mandatory role presence
+  const requiredRoles = ['INSTITUTION_MANAGER', 'FINANCE', 'ACCOUNTANT', 'VP', 'HOI', 'DEAN', 'CEO', 'CHAIRMAN'];
+  if (deptRole) requiredRoles.splice(6, 0, deptRole.toUpperCase());
+
+  for (const reqRole of requiredRoles) {
+    if (!stageRoles.includes(reqRole)) {
+      errors.push(`Workflow must include mandatory role: ${getRoleDisplayName(reqRole)}.`);
+    }
+  }
+
+  // Mandatory relative ordering:
+  // 1. Institution Manager precedes Finance.
+  // 2. Finance precedes Accountant.
+  // 3. Accountant precedes VP.
+  // 4. VP precedes HOI.
+  // 5. HOI precedes Dean.
+  // 6. Dean precedes the selected department.
+  // 7. The selected department precedes CEO.
+  // 8. CEO precedes Chairman.
+  // 9. Chairman is the final stage.
+  const imIdx = stageRoles.indexOf('INSTITUTION_MANAGER');
+  const finIdx = stageRoles.indexOf('FINANCE');
+  const accIdx = stageRoles.indexOf('ACCOUNTANT');
+  const vpIdx = stageRoles.indexOf('VP');
+  const hoiIdx = stageRoles.indexOf('HOI');
+  const deanIdx = stageRoles.indexOf('DEAN');
+  const targetDeptIdx = deptRole ? stageRoles.indexOf(deptRole.toUpperCase()) : -1;
+  const ceoIdx = stageRoles.indexOf('CEO');
+  const chairIdx = stageRoles.lastIndexOf('CHAIRMAN');
+
+  if (imIdx !== -1 && finIdx !== -1 && imIdx >= finIdx) errors.push('Institution Manager must precede Finance.');
+  if (finIdx !== -1 && accIdx !== -1 && finIdx >= accIdx) errors.push('Finance must precede Accountant.');
+  if (accIdx !== -1 && vpIdx !== -1 && accIdx >= vpIdx) errors.push('Accountant must precede VP.');
+  if (vpIdx !== -1 && hoiIdx !== -1 && vpIdx >= hoiIdx) errors.push('VP must precede HOI.');
+  if (hoiIdx !== -1 && deanIdx !== -1 && hoiIdx >= deanIdx) errors.push('HOI must precede Dean.');
+  if (deptRole && deanIdx !== -1 && targetDeptIdx !== -1 && deanIdx >= targetDeptIdx) {
+    errors.push(`Dean must precede ${deptRole} Branch.`);
+  }
+  if (deptRole && targetDeptIdx !== -1 && ceoIdx !== -1 && targetDeptIdx >= ceoIdx) {
+    errors.push(`${deptRole} Branch must precede CEO.`);
+  }
+  if (ceoIdx !== -1 && chairIdx !== -1 && ceoIdx >= chairIdx) errors.push('CEO must precede Chairman.');
+  if (chairIdx !== -1 && chairIdx !== stageRoles.length - 1) {
+    errors.push('Chairman must remain the final approval authority stage.');
+  }
+
+  return [...new Set(errors)];
+};
+
 export const getDefaultGeneralWorkflow = () => ({
   id: 'workflow-general',
-  name: 'General Approval Workflow',
+  name: 'General Workflow',
   version: 1,
   active: true,
   activatedAt: new Date(0).toISOString(),
@@ -238,7 +388,69 @@ export const getDefaultGeneralWorkflow = () => ({
   ]
 });
 
-export const initializeRequestWorkflow = (request: ApprovalRequest, workflows: ApprovalWorkflow[], generalWorkflow?: any): ApprovalRequest => {
+export const initializeRequestWorkflow = (
+  request: ApprovalRequest,
+  workflows: ApprovalWorkflow[],
+  generalWorkflow?: any,
+  resolvedWorkflow?: any
+): ApprovalRequest => {
+  // 1. Departmental / Specific Workflow
+  if (resolvedWorkflow && Array.isArray(resolvedWorkflow.stages) && resolvedWorkflow.stages.length > 0) {
+    const rawStages = resolvedWorkflow.stages;
+    let foundPending = false;
+    let initialStage = 'PENDING';
+    const deptRole = getDepartmentRoleForRequestType(request.requestType) || (request.selectedBranch as any) || 'HR';
+
+    const stages: RequestStageInstance[] = rawStages.map((s: any, idx: number) => {
+      const isApplicable = s.isApplicable !== false;
+      let status: any = 'FUTURE';
+
+      if (!isApplicable) {
+        status = 'SKIPPED';
+      } else if (!foundPending) {
+        status = 'PENDING';
+        initialStage = s.role;
+        foundPending = true;
+      }
+
+      return {
+        id: s.id || `stg-${idx + 1}`,
+        stageIndex: idx,
+        stageKey: s.stageKey || `STAGE_${s.role}`,
+        role: s.role,
+        label: s.label || getRoleDisplayName(s.role),
+        stageType: s.stageType || (s.role === 'DEAN' ? 'DEAN' : (s.role === 'CEO' || s.role === 'CHAIRMAN') ? 'POST_BRANCH' : (s.role === deptRole ? 'BRANCH' : 'PRE_DEAN')),
+        status,
+        isApplicable
+      };
+    });
+
+    const activeSteps = stages.filter(s => s.isApplicable !== false).map(s => ({ id: s.id, role: s.role }));
+
+    return {
+      ...request,
+      status: request.status || 'PENDING',
+      workflowVersionNumber: resolvedWorkflow.version || 1,
+      workflowVersionId: resolvedWorkflow.id,
+      stages,
+      workflowSnapshot: {
+        id: resolvedWorkflow.id,
+        name: resolvedWorkflow.name,
+        branch: deptRole as any,
+        version: resolvedWorkflow.version || 1,
+        steps: activeSteps
+      },
+      currentStage: initialStage || 'INSTITUTION_MANAGER',
+      currentStepIndex: 0,
+      assignedRole: initialStage || 'INSTITUTION_MANAGER',
+      selectedBranch: deptRole as any,
+      workflowSnapshotsByBranch: captureActiveWorkflowSnapshots(workflows),
+      approvalHistory: [],
+      migrationEvents: []
+    };
+  }
+
+  // 2. Fallback to General Workflow
   if (!generalWorkflow) {
     return {
       ...request,
@@ -264,7 +476,7 @@ export const initializeRequestWorkflow = (request: ApprovalRequest, workflows: A
     stages,
     workflowSnapshot: {
       id: gw.id || 'workflow-general',
-      name: gw.name || 'General Approval Workflow',
+      name: gw.name || 'General Workflow',
       branch: branch as any,
       version: gw.version || 1,
       steps: activeSteps
@@ -460,8 +672,12 @@ export const approveWorkflowStep = (
     const branchIdx = request.stages.findIndex((s, idx) => idx > stageIdxToComplete && (s.stageType === 'BRANCH' || postDeanBranches.includes(s.role)));
 
     if (currentStageInstance.role === 'DEAN' && branchIdx >= 0) {
-      const selectedBranch = String(selectedBranchOverride || request.selectedBranch || determineDefaultBranchForCategory(request.category) || 'HR').toUpperCase();
-      const chosenBranch = postDeanBranches.includes(selectedBranch) ? selectedBranch : 'HR';
+      const stageBranchRole = request.stages[branchIdx]?.role;
+      const effectiveBranch = (stageBranchRole && postDeanBranches.includes(stageBranchRole))
+        ? stageBranchRole
+        : (request.selectedBranch || determineDefaultBranchForCategory(request.category) || 'HR');
+      const selectedBranch = String(selectedBranchOverride || effectiveBranch).toUpperCase();
+      const chosenBranch = postDeanBranches.includes(selectedBranch) ? selectedBranch : (stageBranchRole || 'HR');
 
       let stages = request.stages.map((s, idx) => {
         if (idx === stageIdxToComplete) {
