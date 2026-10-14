@@ -4,7 +4,7 @@
   "description": "Smart Approval System REST API",
   "main": "dist/server.js",
   "scripts": {
-    "build": "tsc",
+    "build": "prisma generate && tsc",
     "start": "node dist/server.js",
     "dev": "node --watch -r ts-node/register src/server.ts",
     "test": "node --test test/targeted-workflow-improvements.test.cjs test/mysql-approval-system.test.cjs test/approval-routing-verification.test.cjs test/general-workflow-verification.test.cjs",
