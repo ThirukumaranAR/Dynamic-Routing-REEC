@@ -10,7 +10,8 @@
     "test": "node --test test/targeted-workflow-improvements.test.cjs test/mysql-approval-system.test.cjs test/approval-routing-verification.test.cjs test/general-workflow-verification.test.cjs",
     "bootstrap:chairman": "ts-node src/scripts/bootstrapChairman.ts",
     "prisma:generate": "prisma generate",
-    "prisma:push": "prisma db push"
+    "prisma:push": "prisma db push",
+    "postinstall": "prisma generate"
   },
   "dependencies": {
     "@prisma/client": "^5.22.0",
